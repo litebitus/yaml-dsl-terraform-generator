@@ -1,0 +1,24 @@
+[package]
+name = "yaml-dsl-terraform-generator"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+description = "Generates Terraform from YAML DSLs defined by configuration."
+readme = "README.md"
+repository = "https://github.com/litebitus/yaml-dsl-terraform-generator"
+keywords = ["terraform", "yaml", "dsl", "tfgen", "codegen"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "tfgen"
+path = "src/main.rs"
+
+[dependencies]
+fancy-regex = "0.20.0"
+hcl-edit = "0.10.0"
+rayon = "1.12.0"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+
+[dependencies.yaml-dsl-compiler]
+git = "https://github.com/litebitus/yaml-dsl-compiler"
+rev = "2e67ec9b86299c92b64f3b5bea971a5fb8abe5ba"

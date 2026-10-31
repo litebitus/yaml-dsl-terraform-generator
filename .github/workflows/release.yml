@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level: auto (from Conventional Commits, never across a major), patch, minor or major."
+        required: true
+        type: choice
+        options: [auto, patch, minor, major]
+        default: patch
+      dry_run:
+        description: "Compute and print the next version without changing anything."
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version: 1.27.3
+          cache: false
+
+      - name: Test
+        run: make test
+
+      - name: Install svu
+        run: go install github.com/caarlos0/svu/v3@v3.4.1
+
+      - name: Compute the next version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          case "$BUMP" in
+            patch|minor|major) next="$(svu "$BUMP")" ;;
+            auto)
+              next="$(svu next)"
+              if [ "${next%%.*}" != "$(svu current | cut -d. -f1)" ]; then
+                next="$(svu minor)"
+              fi
+              ;;
+          esac
+          current="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo '(none)')"
+          if [ "$next" = "$current" ]; then
+            echo "no version change ($next); nothing to release" >&2
+            exit 1
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "Current: $current -> Next: $next"
+
+      - name: Check the release before changing anything
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${NEXT}")" ]; then
+            echo "tag $NEXT already exists on origin" >&2
+            exit 1
+          fi
+          awk '/^## Unreleased$/ { inside = 1; next } /^## / { inside = 0 } inside && NF { found = 1 } END { exit !found }' CHANGELOG.md ||
+            { echo "CHANGELOG.md has nothing under '## Unreleased' to release as $NEXT" >&2; exit 1; }
+          unpublished="$(cargo metadata --format-version 1 --locked | jq -r '
+            .workspace_members as $members
+            | .packages[]
+            | select(.id as $id | $members | index($id) | not)
+            | select(.source == null or (.source | startswith("git+")))
+            | "\(.name) \(.version) from \(.source // "a local path")"')"
+          if [ -n "$unpublished" ]; then
+            echo "a release depends only on published crates; these are not:" >&2
+            echo "$unpublished" >&2
+            exit 1
+          fi
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.0
+
+      - name: Install the cross-compiling tools
+        run: |
+          set -euo pipefail
+          cargo install cargo-zigbuild --locked --version 0.24.0
+          rustup target add aarch64-apple-darwin aarch64-unknown-linux-gnu x86_64-apple-darwin x86_64-unknown-linux-gnu
+
+      - name: Stamp the changelog and the version, tag and push
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          awk '/^## Unreleased$/ { inside = 1; next } /^## / { inside = 0 } inside' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          sed -i "s/^## Unreleased$/## Unreleased\n\n## ${NEXT} — $(date -u +%Y-%m-%d)/" CHANGELOG.md
+          sed -i "0,/^version = \".*\"$/s//version = \"${NEXT#v}\"/" Cargo.toml
+          cargo update --workspace
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md Cargo.toml Cargo.lock
+          git commit -m "docs(changelog): ${NEXT}"
+          git tag -a "$NEXT" -m "Release $NEXT"
+          git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "$NEXT"
+
+      - name: Build and publish the release
+        if: ${{ !inputs.dry_run }}
+        uses: goreleaser/goreleaser-action@v7.3.0
+        with:
+          version: "v2.19.0"
+          args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Summary
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --short=7 HEAD)"
+          echo "Released \`tfgen\` \`${NEXT#v}\` from commit \`${commit}\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: echo "DRY RUN - would release ${{ steps.version.outputs.next }}"

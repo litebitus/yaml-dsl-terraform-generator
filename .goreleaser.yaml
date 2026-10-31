@@ -1,0 +1,34 @@
+version: 2
+
+project_name: tfgen
+
+builds:
+  - id: tfgen
+    builder: rust
+    binary: tfgen
+    command: zigbuild
+    flags:
+      - --release
+    targets:
+      - aarch64-apple-darwin
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - x86_64-unknown-linux-gnu
+
+archives:
+  - id: tfgen
+    formats: [tar.gz]
+    name_template: "tfgen_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: litebitus
+    name: yaml-dsl-terraform-generator
+  draft: false
+  prerelease: auto
