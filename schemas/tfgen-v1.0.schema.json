@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/litebitus/yaml-dsl-terraform-generator/schemas/tfgen.schema.json",
-  "title": "tfgen.yml",
+  "$id": "https://github.com/litebitus/yaml-dsl-terraform-generator/schemas/tfgen-v1.0.schema.json",
+  "title": "tfgen.yml v1.0",
   "description": "What a config folder's YAML DSLs compile to: the globals, the templates a stack takes, and a generator per DSL.",
   "type": "object",
   "required": ["version"],
   "additionalProperties": false,
   "properties": {
     "version": {
-      "enum": ["1"],
-      "description": "Config format version."
+      "enum": ["1", "1.0"],
+      "description": "Config format version: `1.0`, or `1` for the newest 1.x tfgen knows."
     },
     "stacks": {
       "type": "object",

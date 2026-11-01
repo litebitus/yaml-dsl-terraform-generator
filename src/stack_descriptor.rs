@@ -11,6 +11,8 @@ use yaml_dsl_spec::resolved::{MapEntry, Value, ValueKind};
 use yaml_dsl_spec::{Diagnostic, Position};
 
 const GLOBALS_BLOCK: &str = "globals";
+/// The global a stack is tfgen's by holding.
+pub const TFGEN_GLOBAL: &str = "tfgen";
 
 /// The globals of the descriptor at `file`, as one map; a labeled `globals` block
 /// sets its attributes under the map its labels name.

@@ -3,8 +3,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
-use crate::config_files::DSL_CONFIG_FILE;
+use crate::config_files::{DSL_CONFIG_FILE, LoadedConfigs, load_config};
+use crate::disk_source::DiskSource;
 
 /// The top of the git working tree holding `directory`.
 pub fn repository_root(directory: &Path) -> Result<PathBuf, String> {
@@ -95,6 +97,99 @@ pub fn config_directory_of(
         }
         directory = directory.parent()?;
     }
+}
+
+/// A stack a run may generate: its directory, its descriptor and its config.
+pub struct StackCandidate {
+    pub directory: PathBuf,
+    pub descriptor: PathBuf,
+    pub config_directory: PathBuf,
+    /// Whether `--stack` named it.
+    pub named: bool,
+}
+
+/// Every stack descriptor of the repo, by the descriptor names of the config it
+/// belongs to; each config of the repo is loaded into `configs`.
+pub fn repository_stacks(
+    root: &Path,
+    configs: &mut LoadedConfigs,
+    source: &Arc<DiskSource>,
+) -> Result<Vec<StackCandidate>, String> {
+    let files = git_files(root, None)?;
+    let config_directories: BTreeSet<PathBuf> = files
+        .iter()
+        .filter(|file| file.file_name().is_some_and(|name| name == DSL_CONFIG_FILE))
+        .filter_map(|file| file.parent().map(Path::to_path_buf))
+        .collect();
+    for directory in &config_directories {
+        load_config(configs, directory, source);
+    }
+    let mut candidates = Vec::new();
+    for file in &files {
+        let Some(config_directory) = config_directory_of(file, root, Some(&config_directories))
+        else {
+            continue;
+        };
+        let Some(Ok(config)) = configs.get(&config_directory) else {
+            continue;
+        };
+        let named_descriptor = file.file_name().is_some_and(|name| {
+            config
+                .descriptor_names()
+                .iter()
+                .any(|descriptor| name == descriptor.as_str())
+        });
+        if named_descriptor {
+            candidates.push(StackCandidate {
+                directory: file.parent().unwrap_or(root).to_path_buf(),
+                descriptor: file.clone(),
+                config_directory,
+                named: false,
+            });
+        }
+    }
+    Ok(candidates)
+}
+
+/// The stack descriptors of the directories `--stack` names, relative to the
+/// working directory; each one's config is loaded into `configs`.
+pub fn named_stacks(
+    stack_arguments: &[String],
+    working_directory: &Path,
+    root: &Path,
+    configs: &mut LoadedConfigs,
+    source: &Arc<DiskSource>,
+) -> Result<Vec<StackCandidate>, String> {
+    let mut candidates = Vec::new();
+    for argument in stack_arguments {
+        let directory = normalized(&working_directory.join(argument));
+        if !directory.is_dir() {
+            return Err(format!("{argument} is not a directory"));
+        }
+        let config_directory = config_directory_of(&directory, root, None)
+            .ok_or_else(|| format!("{argument}: no {DSL_CONFIG_FILE} holds this stack"))?;
+        load_config(configs, &config_directory, source);
+        let descriptor_names = match configs.get(&config_directory) {
+            Some(Ok(config)) => config.descriptor_names(),
+            _ => continue,
+        };
+        let found = candidates.len();
+        for name in descriptor_names {
+            let descriptor = directory.join(&name);
+            if descriptor.is_file() {
+                candidates.push(StackCandidate {
+                    directory: directory.clone(),
+                    descriptor,
+                    config_directory: config_directory.clone(),
+                    named: true,
+                });
+            }
+        }
+        if candidates.len() == found {
+            return Err(format!("{argument} holds no stack descriptor"));
+        }
+    }
+    Ok(candidates)
 }
 
 #[cfg(test)]

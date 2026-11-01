@@ -94,6 +94,20 @@ jobs:
             exit 1
           fi
 
+      - name: Gather the schemas a release attaches
+        run: |
+          set -euo pipefail
+          assets="$RUNNER_TEMP/schemas"
+          mkdir -p "$assets"
+          cp schemas/tfgen-v*.schema.json "$assets/"
+          majors="$(ls schemas | sed -n 's/^tfgen-v\([0-9]*\)\.[0-9]*\.schema\.json$/\1/p' | sort -u)"
+          for major in $majors; do
+            newest="$(ls schemas/tfgen-v"$major".*.schema.json | sort -V | tail -n 1)"
+            cp "$newest" "$assets/tfgen-v$major.schema.json"
+            echo "tfgen-v$major.schema.json from $(basename "$newest")"
+          done
+          echo "SCHEMA_ASSETS=$assets" >> "$GITHUB_ENV"
+
       - name: Set up Zig
         uses: mlugg/setup-zig@v2.2.1
         with:
@@ -130,6 +144,7 @@ jobs:
           args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Summary
         if: ${{ !inputs.dry_run }}

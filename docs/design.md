@@ -78,8 +78,8 @@ Nothing reads a document at plan time. Validation runs when `tfgen` generates, a
 version: "1"
 ```
 
-- `version` is required, and `"1"` is the one format; a version tfgen does not read is an error at the value.
-- Its JSON Schema, `schemas/tfgen.schema.json`, describes each field, and is attached to each release for a modeline to name.
+- `version` is required: `"1.0"`, or `"1"` for the newest 1.x tfgen reads; a version tfgen does not read is an error at the value.
+- Its JSON Schema, `schemas/tfgen-v<version>.schema.json` for each minor, describes each field. Each release attaches every minor's, and each major's as its newest minor, for a modeline to name.
 
 ### Stacks
 
@@ -552,6 +552,7 @@ tfgen --no-color                # no color, where the output is a terminal
 tfgen --schema mock-dsl=../mock-modules/mock.schema.json  # a DSL's schema for this run, repeatable
 TFGEN_SCHEMA=mock-dsl=../mock-modules/mock.schema.json tfgen  # the same, pairs separated by commas
 tfgen --version                 # the release, or `dev` for a build that is none; -v the same
+tfgen completion zsh            # the shell's completion script: bash, zsh or fish
 ```
 
 - `tfgen` writes a file only where its contents change.
@@ -582,6 +583,7 @@ tfgen --version                 # the release, or `dev` for a build that is none
 - Color is on where the output is a terminal and `NO_COLOR` is unset; `--color` and `--no-color` decide it.
 - `--schema` and `TFGEN_SCHEMA` name, by DSL id, the schema the run reads that DSL's documents against, ahead of their modelines; a flag wins over the variable for the DSL it names, and a path is read from the working directory. A document's modeline is never changed for it.
 - A generated file a stack no longer produces is deleted, so a stack's files always match its documents. Only a file carrying `tfgen`'s header, in a stack the run generates, is ever deleted.
+- Completion is the binary's: a script calls `tfgen __complete` with the words typed so far, and offers what it answers. What is typed is matched anywhere in a candidate, and in zsh in each part split at `:` or `/`. `--stack` completes to the repo's stacks whose globals hold `tfgen`, relative to the working directory. `--schema` completes to `<dsl id>=` for each DSL a generator compiles, then to the files and folders of the path typed after the `=`.
 
 ## Performance
 
@@ -593,4 +595,4 @@ A run's cost grows with the stacks it compiles and never with the size of the re
 
 ## Release
 
-GoReleaser builds `tfgen` for darwin and linux, on arm64 and amd64, and publishes a GitHub release with a Homebrew cask.
+GoReleaser builds `tfgen` for darwin and linux, on arm64 and amd64, and publishes a GitHub release with a Homebrew cask in `litebitus/homebrew-tap`. Each archive carries the completion scripts, generated from the binary being released, and the cask installs them.

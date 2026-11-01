@@ -611,7 +611,26 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     assert!(!output.status.success());
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
-    assert!(errors.contains("`version` is one of `\"1\"`"), "{errors}");
+    assert!(
+        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn a_config_naming_its_minor_version_is_read() {
+    let workspace = MockWorkspace::new("config-minor-version");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "tfgen.yml",
+        &ONE_MODULE_CONFIG.replacen("version: \"1\"", "version: \"1.0\"", 1),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -636,7 +655,7 @@ fn each_example_generates_the_files_it_commits() {
 fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let schema: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(manifest.join("schemas/tfgen.schema.json")).unwrap(),
+        &fs::read_to_string(manifest.join("schemas/tfgen-v1.0.schema.json")).unwrap(),
     )
     .unwrap();
     let validator = jsonschema::draft202012::new(&schema).unwrap();
@@ -679,4 +698,170 @@ fn a_misspelt_field_of_the_dsl_definition_is_an_error_at_that_field() {
     assert!(errors.contains("--> yaml-dsl.yml:5:5"), "{errors}");
     assert!(errors.contains("did you mean `file_excludes`?"), "{errors}");
     assert!(!workspace.exists("stacks/dev/main.tf"));
+}
+
+#[test]
+fn the_stack_flag_completes_to_the_repo_s_tfgen_stacks_only() {
+    let workspace = MockWorkspace::new("complete-stacks");
+    one_module_workspace(&workspace);
+    let output = workspace.run(&["__complete", "--stack", ""]);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "stacks/dev\n");
+}
+
+#[test]
+fn the_schema_flag_completes_to_the_generated_dsls_then_their_paths() {
+    let workspace = MockWorkspace::new("complete-schemas");
+    one_module_workspace(&workspace);
+    let ids = workspace.run(&["__complete", "--schema", ""]);
+    assert_eq!(String::from_utf8_lossy(&ids.stdout), "mock-dsl=\n");
+    let paths = workspace.run(&["__complete", "--schema", "mock-dsl=temp"]);
+    assert!(
+        String::from_utf8_lossy(&paths.stdout).contains("mock-dsl=templates/\n"),
+        "{}",
+        String::from_utf8_lossy(&paths.stdout)
+    );
+}
+
+#[test]
+fn the_completion_scripts_are_printed_for_each_shell() {
+    let workspace = MockWorkspace::new("completion-scripts");
+    let zsh = workspace.run(&["completion", "zsh"]);
+    assert!(String::from_utf8_lossy(&zsh.stdout).starts_with("#compdef tfgen\n"));
+    let unknown = workspace.run(&["completion", "mock-shell"]);
+    assert_eq!(unknown.status.code(), Some(2));
+}
+
+/// What bash's completion offers for `typed`, a command line after the binary.
+fn bash_completion(workspace: &MockWorkspace, typed: &str) -> String {
+    let script = workspace.run(&["completion", "bash"]);
+    workspace.write("completion.bash", &String::from_utf8_lossy(&script.stdout));
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            concat!(
+                "source completion.bash\n",
+                "COMP_LINE=\"$TFGEN_BINARY $TYPED\"\n",
+                "COMP_POINT=${#COMP_LINE}\n",
+                "_tfgen 2>/dev/null\n",
+                "printf '%s\\n' \"${COMPREPLY[@]}\"\n",
+            ),
+        ])
+        .env("TFGEN_BINARY", env!("CARGO_BIN_EXE_tfgen"))
+        .env("TYPED", typed)
+        .current_dir(&workspace.root)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn bash_completes_a_stack_and_a_schema_path_after_its_equals_sign() {
+    let workspace = MockWorkspace::new("bash-completion");
+    one_module_workspace(&workspace);
+    assert_eq!(bash_completion(&workspace, "--stack st"), "stacks/dev\n");
+    assert_eq!(bash_completion(&workspace, "--stack dev"), "stacks/dev\n");
+    assert_eq!(bash_completion(&workspace, "--sch"), "--schema\n");
+    assert_eq!(
+        bash_completion(&workspace, "--schema mock-dsl=mock"),
+        "mock.schema.json\n"
+    );
+}
+
+/// What zsh's completion function hands `compadd` for `typed`, the words after the
+/// binary, the last the one being completed: each call's options, then the values
+/// and displays it was given, one per line.
+fn zsh_completion(workspace: &MockWorkspace, typed: &[&str]) -> Option<String> {
+    Command::new("zsh").arg("--version").output().ok()?;
+    let script = workspace.run(&["completion", "zsh"]);
+    workspace.write("_tfgen", &String::from_utf8_lossy(&script.stdout));
+    let output = Command::new("zsh")
+        .args([
+            "-f",
+            "-c",
+            concat!(
+                "compdef() { : }\n",
+                "compadd() {\n",
+                "    local -a said listed\n",
+                "    while (( $# )); do\n",
+                "        if [[ $1 == -[ad] ]]; then\n",
+                "            said+=(\"$1\"); listed+=(\"${(@P)2}\"); shift 2\n",
+                "        else\n",
+                "            said+=(\"$1\"); shift\n",
+                "        fi\n",
+                "    done\n",
+                "    print -r -- \"compadd ${(j: :)${(@qq)said}}\"\n",
+                "    print -rl -- \"  \"${^listed}\n",
+                "}\n",
+                "words=(\"$TFGEN_BINARY\" \"$@\")\n",
+                "CURRENT=${#words}\n",
+                "source ./_tfgen\n",
+                "_tfgen\n",
+                "print -r -- \"postfuncs ${comppostfuncs[*]}\"\n",
+            ),
+            "zsh",
+        ])
+        .args(typed)
+        .env("TFGEN_BINARY", env!("CARGO_BIN_EXE_tfgen"))
+        .current_dir(&workspace.root)
+        .output()
+        .unwrap();
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[test]
+fn zsh_lists_each_flag_with_its_description_and_its_short_form_beside_it() {
+    let workspace = MockWorkspace::new("zsh-flags");
+    let Some(listed) = zsh_completion(&workspace, &[""]) else {
+        eprintln!("zsh is not installed; skipped");
+        return;
+    };
+    let matcher = "'-Q' '-M' 'l:|=* l:[:/]|=* r:|=*'";
+    for display in [
+        format!("  {:<14}  -- a stack to generate, repeatable\n", "--stack"),
+        format!("  {:<14}  -- print the release\n", "--version | -v"),
+    ] {
+        assert!(listed.contains(&display), "{display:?} in {listed}");
+    }
+    assert!(
+        listed.contains(&format!(
+            "compadd '-V' 'options' '-n' {matcher} '-a'\n  -v\n"
+        )),
+        "{listed}"
+    );
+}
+
+#[test]
+fn zsh_is_handed_the_candidates_with_a_matcher_taking_a_run_typed_anywhere() {
+    let workspace = MockWorkspace::new("zsh-stacks");
+    one_module_workspace(&workspace);
+    let Some(listed) = zsh_completion(&workspace, &["--stack", "dev"]) else {
+        eprintln!("zsh is not installed; skipped");
+        return;
+    };
+    assert_eq!(
+        listed,
+        concat!(
+            "compadd '-Q' '-M' 'l:|=* l:[:/]|=* r:|=*' '-a'\n  stacks/dev\n",
+            "postfuncs __tfgen_type_no_shared_run\n",
+        )
+    );
+}
+
+#[test]
+fn zsh_lists_a_lone_flag_s_description_and_never_types_a_shared_run() {
+    let workspace = MockWorkspace::new("zsh-lone-flag");
+    let Some(lone) = zsh_completion(&workspace, &["--sta"]) else {
+        eprintln!("zsh is not installed; skipped");
+        return;
+    };
+    assert!(
+        lone.ends_with("postfuncs __tfgen_type_no_shared_run __tfgen_list_a_lone_description\n"),
+        "{lone}"
+    );
+    let every = zsh_completion(&workspace, &[""]).unwrap();
+    assert!(
+        every.ends_with("postfuncs __tfgen_type_no_shared_run\n"),
+        "{every}"
+    );
 }

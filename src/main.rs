@@ -1,5 +1,6 @@
 //! `tfgen`: generates Terraform from YAML DSLs defined by configuration.
 
+mod command_line;
 mod config_files;
 mod disk_source;
 mod error_report;
@@ -13,6 +14,7 @@ mod schema_credentials;
 mod schema_lookup;
 mod schema_overrides;
 mod schema_url_copies;
+mod shell_completion;
 mod stack_descriptor;
 mod stack_discovery;
 mod stack_generation;
@@ -30,57 +32,25 @@ use rayon::prelude::*;
 use terminal_size::{Height, Width, terminal_size_of};
 use yaml_dsl_spec::Diagnostic;
 
-use crate::config_files::{DSL_CONFIG_FILE, LoadedConfig};
+use crate::command_line::{Request, USAGE, command_line};
+use crate::config_files::{DSL_CONFIG_FILE, LoadedConfigs};
 use crate::disk_source::DiskSource;
 use crate::error_report::{ReportStyle, Severity, SourceFiles, report};
 use crate::generated_files::{FileChange, write_stack_files};
-use crate::schema_overrides::{
-    SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, schema_pair, variable_pairs,
-};
+use crate::schema_overrides::{SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, variable_pairs};
 use crate::schema_url_copies::{SchemaUrlCopies, schema_url_copies_directory};
-use crate::stack_descriptor::read_globals;
-use crate::stack_discovery::{config_directory_of, git_files, normalized, repository_root};
+use crate::shell_completion::candidates;
+use crate::stack_descriptor::{TFGEN_GLOBAL, read_globals};
+use crate::stack_discovery::{named_stacks, repository_root, repository_stacks};
 use crate::stack_generation::{StackJob, generate_stack};
 
-const USAGE: &str = "usage: tfgen [--stack <directory>]... [--schema <dsl id>=<path or URL>]...
-             [--color | --no-color]
-       tfgen --version | -v
-
-Generates every stack of the repo holding the working directory, or each stack
---stack names. --schema, and TFGEN_SCHEMA as pairs separated by commas, name the
-schema a DSL's documents are read against for this run, ahead of their modelines.
-Color is on where the output is a terminal and NO_COLOR is unset.";
-
-const STACK_FLAG: &str = "--stack";
-const HELP_FLAG: &str = "--help";
-const VERSION_FLAGS: [&str; 2] = ["--version", "-v"];
 /// The release a build is of, which GoReleaser passes at build time; `dev` for
 /// any other build.
 const VERSION: &str = match option_env!("TFGEN_VERSION") {
     Some(version) => version,
     None => "dev",
 };
-const SCHEMA_FLAG: &str = "--schema";
-const COLOR_FLAG: &str = "--color";
-const NO_COLOR_FLAG: &str = "--no-color";
 const NO_COLOR_VARIABLE: &str = "NO_COLOR";
-
-/// What the arguments ask for: a run, the usage, or the version.
-#[derive(Debug, PartialEq, Eq)]
-enum Request {
-    Run(CommandLine),
-    Usage,
-    Version,
-}
-
-/// What a run is asked for: the stacks, the schemas named for the run, and
-/// color when a flag forces it.
-#[derive(Debug, PartialEq, Eq)]
-struct CommandLine {
-    stacks: Vec<String>,
-    schemas: Vec<(String, String)>,
-    color: Option<bool>,
-}
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -92,6 +62,18 @@ fn main() -> ExitCode {
         }
         Ok(Request::Version) => {
             println!("tfgen {VERSION}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Request::CompletionScript(shell)) => {
+            print!("{}", shell.script());
+            return ExitCode::SUCCESS;
+        }
+        Ok(Request::CompletionCandidates(words)) => {
+            if let Ok(working_directory) = std::env::current_dir() {
+                for candidate in candidates(&words, &working_directory) {
+                    println!("{candidate}");
+                }
+            }
             return ExitCode::SUCCESS;
         }
         Err(message) => {
@@ -145,38 +127,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// What the arguments ask for: a run, the usage, or the version.
-fn command_line(arguments: &[String]) -> Result<Request, String> {
-    let mut command = CommandLine {
-        stacks: Vec::new(),
-        schemas: Vec::new(),
-        color: None,
-    };
-    let mut remaining = arguments.iter();
-    while let Some(argument) = remaining.next() {
-        match argument.as_str() {
-            HELP_FLAG => return Ok(Request::Usage),
-            flag if VERSION_FLAGS.contains(&flag) => return Ok(Request::Version),
-            STACK_FLAG => {
-                let directory = remaining
-                    .next()
-                    .ok_or_else(|| format!("{STACK_FLAG} takes a directory"))?;
-                command.stacks.push(directory.clone());
-            }
-            SCHEMA_FLAG => {
-                let pair = remaining
-                    .next()
-                    .ok_or_else(|| format!("{SCHEMA_FLAG} takes `<dsl id>=<path or URL>`"))?;
-                command.schemas.push(schema_pair(pair)?);
-            }
-            COLOR_FLAG => command.color = Some(true),
-            NO_COLOR_FLAG => command.color = Some(false),
-            _ => return Err(format!("`{argument}` is not an argument tfgen takes")),
-        }
-    }
-    Ok(Request::Run(command))
-}
-
 /// How standard output and standard error are painted.
 #[derive(Clone, Copy)]
 struct OutputStyles {
@@ -223,14 +173,6 @@ impl ErrorPrinter<'_> {
     }
 }
 
-/// A stack a run may generate: its directory, its descriptor and its config.
-struct StackCandidate {
-    directory: PathBuf,
-    descriptor: PathBuf,
-    config_directory: PathBuf,
-    named: bool,
-}
-
 /// Generates the stacks; `false` where any stack has an error.
 fn run(
     stack_arguments: &[String],
@@ -249,71 +191,17 @@ fn run(
     let source = Arc::new(DiskSource);
     let mut configs = LoadedConfigs::new();
     let schema_urls = SchemaUrlCopies::new(schema_url_copies_directory());
-    let mut candidates = Vec::new();
-    if stack_arguments.is_empty() {
-        let files = git_files(&root, None)?;
-        let config_directories: BTreeSet<PathBuf> = files
-            .iter()
-            .filter(|file| file.file_name().is_some_and(|name| name == DSL_CONFIG_FILE))
-            .filter_map(|file| file.parent().map(Path::to_path_buf))
-            .collect();
-        for directory in &config_directories {
-            load_config(&mut configs, directory, &source);
-        }
-        for file in &files {
-            let Some(config_directory) =
-                config_directory_of(file, &root, Some(&config_directories))
-            else {
-                continue;
-            };
-            let Some(Ok(config)) = configs.get(&config_directory) else {
-                continue;
-            };
-            let named_descriptor = file.file_name().is_some_and(|name| {
-                config
-                    .descriptor_names()
-                    .iter()
-                    .any(|descriptor| name == descriptor.as_str())
-            });
-            if named_descriptor {
-                candidates.push(StackCandidate {
-                    directory: file.parent().unwrap_or(&root).to_path_buf(),
-                    descriptor: file.clone(),
-                    config_directory,
-                    named: false,
-                });
-            }
-        }
+    let candidates = if stack_arguments.is_empty() {
+        repository_stacks(&root, &mut configs, &source)?
     } else {
-        for argument in stack_arguments {
-            let directory = normalized(&working_directory.join(argument));
-            if !directory.is_dir() {
-                return Err(format!("{argument} is not a directory"));
-            }
-            let config_directory = config_directory_of(&directory, &root, None)
-                .ok_or_else(|| format!("{argument}: no {DSL_CONFIG_FILE} holds this stack"))?;
-            load_config(&mut configs, &config_directory, &source);
-            let descriptor_names = match configs.get(&config_directory) {
-                Some(Ok(config)) => config.descriptor_names(),
-                _ => continue,
-            };
-            let found = candidates.len();
-            for name in descriptor_names {
-                let descriptor = directory.join(&name);
-                if descriptor.is_file() {
-                    candidates.push(StackCandidate {
-                        directory: directory.clone(),
-                        descriptor,
-                        config_directory: config_directory.clone(),
-                        named: true,
-                    });
-                }
-            }
-            if candidates.len() == found {
-                return Err(format!("{argument} holds no stack descriptor"));
-            }
-        }
-    }
+        named_stacks(
+            stack_arguments,
+            &working_directory,
+            &root,
+            &mut configs,
+            &source,
+        )?
+    };
     let mut succeeded = true;
     for (directory, result) in &configs {
         if let Err(diagnostics) = result {
@@ -358,7 +246,7 @@ fn run(
                 continue;
             }
         };
-        if globals.get("tfgen").is_none() {
+        if globals.get(TFGEN_GLOBAL).is_none() {
             if candidate.named {
                 errors.message(&format!(
                     "{}: the stack's globals hold no `tfgen`, so it is not tfgen's",
@@ -430,14 +318,6 @@ fn run(
     Ok(succeeded)
 }
 
-type LoadedConfigs = BTreeMap<PathBuf, Result<LoadedConfig, Vec<Diagnostic>>>;
-
-fn load_config(configs: &mut LoadedConfigs, directory: &Path, source: &Arc<DiskSource>) {
-    configs
-        .entry(directory.to_path_buf())
-        .or_insert_with(|| LoadedConfig::load(directory, source));
-}
-
 /// Where a diagnostic stands, for reporting a stack's errors in file order.
 fn place(diagnostic: &Diagnostic) -> Option<(&str, usize, usize)> {
     let position = diagnostic.position.as_ref()?;
@@ -449,48 +329,4 @@ fn shown(path: &Path, root: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn arguments(texts: &[&str]) -> Vec<String> {
-        texts.iter().map(|text| (*text).to_owned()).collect()
-    }
-
-    #[test]
-    fn the_stack_flag_repeats_and_nothing_else_is_taken() {
-        assert_eq!(
-            command_line(&arguments(&[
-                "--stack",
-                "a",
-                "--stack",
-                "b",
-                "--schema",
-                "mock-dsl=mock.json",
-                "--no-color"
-            ]))
-            .unwrap(),
-            Request::Run(CommandLine {
-                stacks: vec!["a".to_owned(), "b".to_owned()],
-                schemas: vec![("mock-dsl".to_owned(), "mock.json".to_owned())],
-                color: Some(false),
-            })
-        );
-        assert_eq!(
-            command_line(&arguments(&["--help"])).unwrap(),
-            Request::Usage
-        );
-        assert_eq!(
-            command_line(&arguments(&["--stack", "a", "-v"])).unwrap(),
-            Request::Version
-        );
-        assert_eq!(
-            command_line(&arguments(&["--version"])).unwrap(),
-            Request::Version
-        );
-        assert!(command_line(&arguments(&["--stack"])).is_err());
-        assert!(command_line(&arguments(&["-s", "a"])).is_err());
-    }
 }

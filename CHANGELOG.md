@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Generation
-  - `tfgen.yml` states its format, `version: "1"`; its JSON Schema is attached to each release.
+  - `tfgen.yml` states its format, `version: "1"` or `"1.0"`; each release attaches its JSON Schema, every minor's and each major's as its newest minor.
   - Examples of both module layouts: one module at one pin, and a module per component.
   - Reads `yaml-dsl.yml` through yaml-dsl-spec: a definition is validated, every problem reported at its field.
   - Compiles each stack's documents by its DSL's generator, through templates, in the document's order.
@@ -14,6 +14,8 @@
 - Command line
   - `tfgen` generates every stack of the repo; `--stack` names one, repeatable.
   - `--version` and `-v` print the release, or `dev` for a local build.
+  - `tfgen completion bash | zsh | fish` prints the shell's completion script; `--stack` completes to the repo's stacks, `--schema` to its DSL ids, then paths.
+  - Installs with Homebrew, `brew install litebitus/tap/tfgen`, with completion for each shell.
   - Lists each changed stack's files as `terramate generate` does, then how many of the stacks compared changed.
   - `--schema` and `TFGEN_SCHEMA` name a DSL's schema for one run, ahead of its documents' modelines.
   - Reports errors as a compiler does, with the source around them, in color on a terminal, divided to its width; `--color` and `--no-color` decide it.

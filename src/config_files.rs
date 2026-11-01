@@ -1,6 +1,7 @@
 //! A config folder's `yaml-dsl.yml` and `tfgen.yml`: the DSLs it declares, and
 //! what each generated DSL compiles to.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use crate::template_filling::check_fixed_roots;
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
 /// The `tfgen.yml` formats tfgen reads, by their `version`.
-const TFGEN_CONFIG_VERSIONS: &[&str] = &["1"];
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0"];
 const DEFAULT_DESCRIPTOR: &str = "stack.tg.hcl";
 
 /// A config folder: every DSL its `yaml-dsl.yml` declares, and its `tfgen.yml`.
@@ -213,6 +214,17 @@ impl LoadedConfig {
             None => vec![DEFAULT_DESCRIPTOR.to_owned()],
         }
     }
+}
+
+/// Each config folder a run reads, by its directory: its config, or every
+/// problem its files hold.
+pub type LoadedConfigs = BTreeMap<PathBuf, Result<LoadedConfig, Vec<Diagnostic>>>;
+
+/// Loads `directory`'s config once, however many stacks it configures.
+pub fn load_config(configs: &mut LoadedConfigs, directory: &Path, source: &Arc<DiskSource>) {
+    configs
+        .entry(directory.to_path_buf())
+        .or_insert_with(|| LoadedConfig::load(directory, source));
 }
 
 fn located(error: Diagnostic, position: &Position, id: &str) -> Diagnostic {

@@ -2,6 +2,13 @@ version: 2
 
 project_name: tfgen
 
+before:
+  hooks:
+    - mkdir -p completions
+    - sh -c 'cargo run --quiet -- completion bash > completions/tfgen.bash'
+    - sh -c 'cargo run --quiet -- completion zsh > completions/tfgen.zsh'
+    - sh -c 'cargo run --quiet -- completion fish > completions/tfgen.fish'
+
 builds:
   - id: tfgen
     builder: rust
@@ -21,12 +28,34 @@ archives:
   - id: tfgen
     formats: [tar.gz]
     name_template: "tfgen_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - completions/*
 
 checksum:
   name_template: "checksums.txt"
 
 changelog:
   disable: true
+
+homebrew_casks:
+  - name: tfgen
+    repository:
+      owner: litebitus
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/litebitus/yaml-dsl-terraform-generator"
+    description: "Generates Terraform from YAML DSLs"
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/tfgen"]
+        end
+      end
+    completions:
+      bash: completions/tfgen.bash
+      zsh: completions/tfgen.zsh
+      fish: completions/tfgen.fish
 
 release:
   github:
@@ -35,4 +64,4 @@ release:
   draft: false
   prerelease: auto
   extra_files:
-    - glob: schemas/tfgen.schema.json
+    - glob: "{{ .Env.SCHEMA_ASSETS }}/*.schema.json"
