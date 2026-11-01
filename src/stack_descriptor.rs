@@ -201,7 +201,7 @@ mod tests {
             &file,
             concat!(
                 "stack {\n  name = \"mock\"\n}\n",
-                "globals {\n  _env = \"dev\"\n  tfgen = { templates = { aws = {} } }\n}\n",
+                "globals {\n  env = \"dev\"\n  tfgen = { templates = { aws = {} } }\n}\n",
                 "globals \"mock\" {\n  count = 2\n}\n",
             ),
         )
@@ -209,7 +209,7 @@ mod tests {
         let globals = read_globals(&file);
         std::fs::remove_dir_all(&directory).unwrap();
         let globals = globals.unwrap();
-        assert_eq!(globals.get("_env").and_then(Value::as_str), Some("dev"));
+        assert_eq!(globals.get("env").and_then(Value::as_str), Some("dev"));
         assert!(
             globals
                 .get("tfgen")

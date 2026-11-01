@@ -67,10 +67,19 @@ Nothing reads a document at plan time. Validation runs when `tfgen` generates, a
 | Input | Holds |
 |---|---|
 | `yaml-dsl.yml` | each DSL's syntax: its files, layers, scopes, declarations and references |
-| `tfgen.yml` | `globals`, the `templates` a stack takes, and a generator per DSL |
+| `tfgen.yml` | its format's `version`, `globals`, the `templates` a stack takes, and a generator per DSL |
 | templates | HCL files `tfgen.yml` names |
 | a stack descriptor | the stack's own values, as the globals of its descriptor file |
 | documents | the stack's declarations |
+
+`tfgen.yml` names its format first, as `yaml-dsl.yml` does:
+
+```yaml
+version: "1"
+```
+
+- `version` is required, and `"1"` is the one format; a version tfgen does not read is an error at the value.
+- Its JSON Schema, `schemas/tfgen.schema.json`, describes each field, and is attached to each release for a modeline to name.
 
 ### Stacks
 
@@ -88,7 +97,7 @@ stacks:
 
 ```hcl
 globals {
-  _env = "dev"
+  env = "dev"
 
   tfgen = {
     templates = {
@@ -335,7 +344,7 @@ With these rules, `ref lookup.mock_vpc.id` is written `module.lookup.o["mock_vpc
 values:
   stack_regions:
     value: '{{fold["cloud"]["regions"]}}'
-    default: ["{{tfgen[stack._env].region}}"]
+    default: ["{{tfgen[stack.env].region}}"]
   dependency_stacks:
     each: "$.lookup.*"
     where: { type: remote_state }
@@ -493,9 +502,9 @@ A ref, `{{<root>.<path>}}`, stands in a template, a global or a generator settin
 
 | Root | Reads |
 |---|---|
-| `stack` | the globals of the stack's descriptor: `stack._env` |
+| `stack` | the globals of the stack's descriptor: `stack.env` |
 | `fold` | the stack's folded document: `fold.cloud.regions` |
-| `tfgen` | the globals of `tfgen.yml`: `tfgen[stack._env].region` |
+| `tfgen` | the globals of `tfgen.yml`: `tfgen[stack.env].region` |
 
 - A path names keys as written. `[…]` holding another ref indexes by that ref's value.
 - `.key` is a key the path says is there, and a miss is an error naming the path. `["key"]` is a key that may be absent, and a miss answers nothing.
@@ -542,6 +551,7 @@ tfgen --stack services/mock-api # one stack, repeatable
 tfgen --no-color                # no color, where the output is a terminal
 tfgen --schema mock-dsl=../mock-modules/mock.schema.json  # a DSL's schema for this run, repeatable
 TFGEN_SCHEMA=mock-dsl=../mock-modules/mock.schema.json tfgen  # the same, pairs separated by commas
+tfgen --version                 # the release, or `dev` for a build that is none; -v the same
 ```
 
 - `tfgen` writes a file only where its contents change.

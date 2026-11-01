@@ -150,20 +150,20 @@ mod tests {
 
     #[test]
     fn a_path_reads_required_optional_and_indexed_steps() {
-        let path = parse_path("tfgen[stack._env][\"region\"].name").unwrap();
+        let path = parse_path("tfgen[stack.env][\"region\"].name").unwrap();
         assert_eq!(path.root, "tfgen");
         assert_eq!(
             path.steps,
             [
                 RefStep::IndexedBy(RefPath {
                     root: "stack".into(),
-                    steps: vec![RefStep::RequiredKey("_env".into())],
+                    steps: vec![RefStep::RequiredKey("env".into())],
                 }),
                 RefStep::OptionalKey("region".into()),
                 RefStep::RequiredKey("name".into()),
             ]
         );
-        assert_eq!(path.to_string(), "tfgen[stack._env][\"region\"].name");
+        assert_eq!(path.to_string(), "tfgen[stack.env][\"region\"].name");
     }
 
     #[test]

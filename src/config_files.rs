@@ -18,6 +18,8 @@ use crate::template_filling::check_fixed_roots;
 
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
+/// The `tfgen.yml` formats tfgen reads, by their `version`.
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1"];
 const DEFAULT_DESCRIPTOR: &str = "stack.tg.hcl";
 
 /// A config folder: every DSL its `yaml-dsl.yml` declares, and its `tfgen.yml`.
@@ -236,6 +238,7 @@ impl TfgenConfig {
     fn read(file: &Path, directory: &Path) -> Result<Self, Diagnostic> {
         let (root, source) = read_yaml_text(file)?;
         let mut config = MapReader::new(&root, "tfgen.yml")?;
+        config_version(config.required("version")?)?;
         let descriptor_names = match config.optional("stacks") {
             Some(stacks) => {
                 let mut stacks = MapReader::new(stacks, "`stacks`")?;
@@ -454,6 +457,28 @@ impl StackTemplate {
             required_providers,
         })
     }
+}
+
+/// Checks `tfgen.yml`'s `version` names a format tfgen reads.
+fn config_version(node: &Node) -> Result<(), Diagnostic> {
+    let version = text(node, "`version`")?;
+    if TFGEN_CONFIG_VERSIONS.contains(&version.as_str()) {
+        return Ok(());
+    }
+    let versions: Vec<String> = TFGEN_CONFIG_VERSIONS
+        .iter()
+        .map(|version| (*version).to_owned())
+        .collect();
+    let listed = versions
+        .iter()
+        .map(|version| format!("`\"{version}\"`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(Diagnostic::at(
+        &node.position,
+        format!("`{version}` is not an allowed value"),
+    )
+    .with_label(format!("`version` is one of {listed}")))
 }
 
 /// The roots every template reads.

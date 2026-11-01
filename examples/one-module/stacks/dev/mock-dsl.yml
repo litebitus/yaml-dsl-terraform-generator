@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../mock-dsl.schema.json
+locals:
+  team: mock-team
+
+queue:
+  name mock-orders:
+    visibility_seconds: 60
+    tags: { env: "${env}", team: local.team }
+
+outputs:
+  orders_url: ref queue.mock_orders.url
+  orders_password: ref queue.mock_orders.password

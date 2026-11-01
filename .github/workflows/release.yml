@@ -33,6 +33,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Set up Rust
+        run: rustup toolchain install
+
       - name: Set up Go
         uses: actions/setup-go@v7.0.0
         with:

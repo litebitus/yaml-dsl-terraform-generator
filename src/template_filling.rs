@@ -438,7 +438,7 @@ mod tests {
             "  config = merge({{each.value}}, { a = 1 })\n",
             "  name   = \"${replace(\"{{stack.owner}}\", \"-\", \"_\")}\"\n",
             "  value  = module.{{each.name}}.o\n",
-            "  script = <<-EOT\n    echo {{stack._env}}\n  EOT\n",
+            "  script = <<-EOT\n    echo {{stack.env}}\n  EOT\n",
             "  {{fold[\"locals\"]}}\n",
             "}\n",
         );

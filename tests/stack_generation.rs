@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 const DSL_CONFIG: &str = r#"dsls:
   - id: mock-dsl
@@ -53,7 +54,9 @@ const DSL_CONFIG: &str = r#"dsls:
 
 const SCHEMA: &str = r#"{"type": "object"}"#;
 
-const ONE_MODULE_CONFIG: &str = r#"globals:
+const ONE_MODULE_CONFIG: &str = r#"version: "1"
+
+globals:
   dev:
     region: mock-region-1
   full_session_name fn.format*: ["mock_%A", "{{stack.__path__}}"]
@@ -63,11 +66,11 @@ generators:
   mock-dsl:
     written_to: main.tf
     builtin_values:
-      env: "{{stack._env}}"
+      env: "{{stack.env}}"
     values:
       regions:
         value: '{{fold["cloud"]["regions"]}}'
-        default: ["{{tfgen[stack._env].region}}"]
+        default: ["{{tfgen[stack.env].region}}"]
     blocks:
       - template: templates/module.hcl
         each: declaration
@@ -102,7 +105,9 @@ const ONE_MODULE_TEMPLATE: &str = r#"module "{{each.scope_key}}_{{each.name}}" {
 }
 "#;
 
-const MODULE_PER_COMPONENT_CONFIG: &str = r#"globals:
+const MODULE_PER_COMPONENT_CONFIG: &str = r#"version: "1"
+
+globals:
   modules:
     queue:
       source: registry.example.com/mock/queue/aws
@@ -176,6 +181,31 @@ impl MockWorkspace {
     }
 }
 
+impl MockWorkspace {
+    /// Copies `relative`, a folder of this repo, to the same place in the workspace.
+    fn copy_from_repo(&self, relative: &str) {
+        copy_folder(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join(relative),
+            &self.root.join(relative),
+        );
+    }
+}
+
+fn copy_folder(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_folder(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+const EXAMPLES: [&str; 2] = ["examples/one-module", "examples/module-per-component"];
+
 impl Drop for MockWorkspace {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
@@ -212,7 +242,7 @@ fn one_module_workspace(workspace: &MockWorkspace) {
         "templates/provider.hcl",
         concat!(
             "provider \"mock\" {\n",
-            "  region  = \"{{tfgen[stack._env].region}}\"\n",
+            "  region  = \"{{tfgen[stack.env].region}}\"\n",
             "  session = \"{{tfgen.session_name}}\"\n",
             "}\n\n",
             "terraform {\n",
@@ -243,7 +273,7 @@ fn one_module_workspace(workspace: &MockWorkspace) {
         "stacks/dev/stack.tg.hcl",
         concat!(
             "globals {\n",
-            "  _env            = \"dev\"\n",
+            "  env             = \"dev\"\n",
             "  modules_version = \"1.2.3\"\n",
             "  tfgen           = { templates = { provider = {} } }\n",
             "}\n",
@@ -259,7 +289,7 @@ fn one_module_workspace(workspace: &MockWorkspace) {
     );
     workspace.write(
         "terramate-stack/stack.tg.hcl",
-        "globals {\n  _env = \"dev\"\n}\n",
+        "globals {\n  env = \"dev\"\n}\n",
     );
 }
 
@@ -277,7 +307,7 @@ fn module_per_component_workspace(workspace: &MockWorkspace) {
     );
     workspace.write(
         "per-component/queue-stack/stack.tg.hcl",
-        "globals {\n  _env  = \"dev\"\n  tfgen = {}\n}\n",
+        "globals {\n  env   = \"dev\"\n  tfgen = {}\n}\n",
     );
 }
 
@@ -413,7 +443,7 @@ fn a_generator_schema_is_the_fallback_when_the_modeline_names_none() {
                 "    written_to: main.tf\n",
                 "    schema:\n",
                 "      - .terraform/modules/*/mock.schema.json\n",
-                "      - \"{config_root}/schemas/{{stack._env}}.schema.json\"\n",
+                "      - \"{config_root}/schemas/{{stack.env}}.schema.json\"\n",
             ),
         ),
     );
@@ -519,7 +549,7 @@ fn a_config_error_is_reported_at_its_file_with_the_closest_name() {
     let output = workspace.run(&["--no-color"]);
     assert!(!output.status.success());
     let errors = String::from_utf8_lossy(&output.stderr);
-    assert!(errors.contains("--> tfgen.yml:9:5"), "{errors}");
+    assert!(errors.contains("--> tfgen.yml:11:5"), "{errors}");
     assert!(errors.contains("did you mean `written_to`?"), "{errors}");
     assert!(
         errors.contains("tfgen.yml holds an error, so no stack it configures was generated"),
@@ -542,4 +572,70 @@ fn a_template_reading_a_field_its_root_lacks_fails_when_the_config_is_read() {
     assert!(errors.contains("`reference` holds no `nam`"), "{errors}");
     assert!(errors.contains("did you mean `name`?"), "{errors}");
     assert!(!workspace.exists("stacks/dev/main.tf"));
+}
+
+#[test]
+fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
+    let workspace = MockWorkspace::new("config-version");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "tfgen.yml",
+        &ONE_MODULE_CONFIG.replacen("version: \"1\"", "version: \"2\"", 1),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
+    assert!(errors.contains("`version` is one of `\"1\"`"), "{errors}");
+}
+
+#[test]
+fn each_example_generates_the_files_it_commits() {
+    let workspace = MockWorkspace::new("examples");
+    for example in EXAMPLES {
+        workspace.copy_from_repo(example);
+    }
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("0 of {} stacks changed\n", EXAMPLES.len())
+    );
+}
+
+#[test]
+fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let schema: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(manifest.join("schemas/tfgen.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let validator = jsonschema::draft202012::new(&schema).unwrap();
+    let mut configs: Vec<(String, String)> = vec![
+        ("ONE_MODULE_CONFIG".to_owned(), ONE_MODULE_CONFIG.to_owned()),
+        (
+            "MODULE_PER_COMPONENT_CONFIG".to_owned(),
+            MODULE_PER_COMPONENT_CONFIG.to_owned(),
+        ),
+    ];
+    for example in EXAMPLES {
+        let file = format!("{example}/tfgen.yml");
+        configs.push((
+            file.clone(),
+            fs::read_to_string(manifest.join(&file)).unwrap(),
+        ));
+    }
+    for (name, text) in configs {
+        let node =
+            yaml_dsl_compiler::yaml_reader::parse(&Arc::from(name.as_str()), &text, &[]).unwrap();
+        let errors: Vec<String> = validator
+            .iter_errors(&node.to_json())
+            .map(|error| format!("{error} at {}", error.instance_path()))
+            .collect();
+        assert!(errors.is_empty(), "{name}: {errors:?}");
+    }
 }

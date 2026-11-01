@@ -1355,6 +1355,7 @@ dependencies = [
  "fancy-regex 0.20.0",
  "globset",
  "hcl-edit",
+ "jsonschema",
  "rayon",
  "serde",
  "serde_json",

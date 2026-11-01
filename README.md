@@ -10,6 +10,13 @@ A YAML DSL over Terraform. A stack's author writes documents in the organization
 - Errors name their file, line and column; a stack with an error gets no files.
 - A run never walks the repo: stacks come from git, and they generate in parallel.
 
+## Examples
+
+| Layout | Example |
+|---|---|
+| Every component in one module, at one pin | [`examples/one-module/`](examples/one-module) |
+| A module per component, each with its own source and version | [`examples/module-per-component/`](examples/module-per-component) |
+
 ## Configuration
 
 | File | Holds |
@@ -18,6 +25,8 @@ A YAML DSL over Terraform. A stack's author writes documents in the organization
 | `tfgen.yml` | globals, the templates a stack takes, and a generator per DSL |
 | `stack.tg.hcl` | a stack's own values, in its `globals` |
 
+`tfgen.yml`'s JSON Schema is [schemas/tfgen.schema.json](schemas/tfgen.schema.json), attached to each release. Each field is described there.
+
 ## Usage
 
 ```sh
@@ -25,6 +34,7 @@ tfgen                           # every stack of the repo
 tfgen --stack services/mock-api # one stack, repeatable
 tfgen --no-color                # no color, where the output is a terminal
 tfgen --schema mock-dsl=../mock-modules/mock.schema.json  # a schema being changed locally
+tfgen --version                 # the release, or `dev` for a local build; -v the same
 ```
 
 ## Development

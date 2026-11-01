@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mock-dsl",
+  "description": "A mock DSL of queues and the keys that encrypt them.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "locals": {
+      "type": "object",
+      "description": "Named values the document reads as `local.<name>`."
+    },
+    "queue": {
+      "type": "object",
+      "description": "Queues, each keyed `name <queue name>`.",
+      "additionalProperties": { "$ref": "#/$defs/queue" }
+    },
+    "key": {
+      "type": "object",
+      "description": "Encryption keys, each keyed `name <key name>`.",
+      "additionalProperties": { "$ref": "#/$defs/key" }
+    },
+    "outputs": {
+      "type": "object",
+      "description": "The stack's outputs, each a reference or a value."
+    }
+  },
+  "$defs": {
+    "queue": {
+      "type": "object",
+      "required": ["name", "visibility_seconds"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "The queue's name." },
+        "visibility_seconds": {
+          "type": "integer",
+          "description": "Seconds a received message stays hidden."
+        },
+        "kms_key": {
+          "type": "string",
+          "description": "The key that encrypts the queue, as a reference."
+        },
+        "tags": { "type": "object", "description": "Tags, by name." }
+      }
+    },
+    "key": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "The key's alias." },
+        "rotation": { "type": "boolean", "description": "Whether the key rotates yearly." }
+      }
+    }
+  }
+}

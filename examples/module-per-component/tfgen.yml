@@ -1,0 +1,44 @@
+version: "1"
+
+globals:
+  dev:
+    region: mock-region-1
+  production:
+    region: mock-region-2
+  modules:
+    key:
+      source: registry.example.com/mock-org/key/mock
+      version: 2.0.1
+    queue:
+      source: registry.example.com/mock-org/queue/mock
+      version: 1.4.0
+
+generators:
+  mock-dsl:
+    written_to: main.tf
+    builtin_values:
+      env: "{{stack.env}}"
+    blocks:
+      - template: templates/module.hcl
+        each: declaration
+        scope: RESOURCE
+      - template: templates/sensitive_output.hcl
+        each: entry
+        path: "$.outputs.*"
+        value_matches: "password$"
+      - template: templates/output.hcl
+        each: entry
+        path: "$.outputs.*"
+      - template: templates/locals.hcl
+    references:
+      - scope: RESOURCE
+        template: "module.{{reference.scope_key}}_{{reference.name}}{{reference.path}}"
+      - scope: local
+        template: "local.{{reference.name}}{{reference.path}}"
+
+templates:
+  provider:
+    file: templates/provider.hcl
+    written_to: providers.tf
+    required_providers:
+      mock: mock-org/mock

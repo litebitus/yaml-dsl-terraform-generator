@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=../mock-dsl.schema.json
+key:
+  name mock-main:
+    rotation: true
+
+queue:
+  name mock-orders:
+    visibility_seconds: 30
+    kms_key: ref key.mock_main.arn

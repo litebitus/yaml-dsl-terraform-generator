@@ -44,6 +44,7 @@ use crate::stack_generation::{StackJob, generate_stack};
 
 const USAGE: &str = "usage: tfgen [--stack <directory>]... [--schema <dsl id>=<path or URL>]...
              [--color | --no-color]
+       tfgen --version | -v
 
 Generates every stack of the repo holding the working directory, or each stack
 --stack names. --schema, and TFGEN_SCHEMA as pairs separated by commas, name the
@@ -52,12 +53,27 @@ Color is on where the output is a terminal and NO_COLOR is unset.";
 
 const STACK_FLAG: &str = "--stack";
 const HELP_FLAG: &str = "--help";
+const VERSION_FLAGS: [&str; 2] = ["--version", "-v"];
+/// The release a build is of, which GoReleaser passes at build time; `dev` for
+/// any other build.
+const VERSION: &str = match option_env!("TFGEN_VERSION") {
+    Some(version) => version,
+    None => "dev",
+};
 const SCHEMA_FLAG: &str = "--schema";
 const COLOR_FLAG: &str = "--color";
 const NO_COLOR_FLAG: &str = "--no-color";
 const NO_COLOR_VARIABLE: &str = "NO_COLOR";
 
-/// What the arguments ask for: the stacks, the schemas named for the run, and
+/// What the arguments ask for: a run, the usage, or the version.
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    Run(CommandLine),
+    Usage,
+    Version,
+}
+
+/// What a run is asked for: the stacks, the schemas named for the run, and
 /// color when a flag forces it.
 #[derive(Debug, PartialEq, Eq)]
 struct CommandLine {
@@ -69,9 +85,13 @@ struct CommandLine {
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let command = match command_line(&arguments) {
-        Ok(Some(command)) => command,
-        Ok(None) => {
+        Ok(Request::Run(command)) => command,
+        Ok(Request::Usage) => {
             println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Request::Version) => {
+            println!("tfgen {VERSION}");
             return ExitCode::SUCCESS;
         }
         Err(message) => {
@@ -125,8 +145,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// The arguments' request, or `None` for a request for usage.
-fn command_line(arguments: &[String]) -> Result<Option<CommandLine>, String> {
+/// What the arguments ask for: a run, the usage, or the version.
+fn command_line(arguments: &[String]) -> Result<Request, String> {
     let mut command = CommandLine {
         stacks: Vec::new(),
         schemas: Vec::new(),
@@ -135,7 +155,8 @@ fn command_line(arguments: &[String]) -> Result<Option<CommandLine>, String> {
     let mut remaining = arguments.iter();
     while let Some(argument) = remaining.next() {
         match argument.as_str() {
-            HELP_FLAG => return Ok(None),
+            HELP_FLAG => return Ok(Request::Usage),
+            flag if VERSION_FLAGS.contains(&flag) => return Ok(Request::Version),
             STACK_FLAG => {
                 let directory = remaining
                     .next()
@@ -153,7 +174,7 @@ fn command_line(arguments: &[String]) -> Result<Option<CommandLine>, String> {
             _ => return Err(format!("`{argument}` is not an argument tfgen takes")),
         }
     }
-    Ok(Some(command))
+    Ok(Request::Run(command))
 }
 
 /// How standard output and standard error are painted.
@@ -446,13 +467,24 @@ mod tests {
                 "--no-color"
             ]))
             .unwrap(),
-            Some(CommandLine {
+            Request::Run(CommandLine {
                 stacks: vec!["a".to_owned(), "b".to_owned()],
                 schemas: vec![("mock-dsl".to_owned(), "mock.json".to_owned())],
                 color: Some(false),
             })
         );
-        assert_eq!(command_line(&arguments(&["--help"])).unwrap(), None);
+        assert_eq!(
+            command_line(&arguments(&["--help"])).unwrap(),
+            Request::Usage
+        );
+        assert_eq!(
+            command_line(&arguments(&["--stack", "a", "-v"])).unwrap(),
+            Request::Version
+        );
+        assert_eq!(
+            command_line(&arguments(&["--version"])).unwrap(),
+            Request::Version
+        );
         assert!(command_line(&arguments(&["--stack"])).is_err());
         assert!(command_line(&arguments(&["-s", "a"])).is_err());
     }

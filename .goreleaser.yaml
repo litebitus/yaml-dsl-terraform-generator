@@ -9,6 +9,8 @@ builds:
     command: zigbuild
     flags:
       - --release
+    env:
+      - TFGEN_VERSION={{ .Version }}
     targets:
       - aarch64-apple-darwin
       - aarch64-unknown-linux-gnu
@@ -32,3 +34,5 @@ release:
     name: yaml-dsl-terraform-generator
   draft: false
   prerelease: auto
+  extra_files:
+    - glob: schemas/tfgen.schema.json

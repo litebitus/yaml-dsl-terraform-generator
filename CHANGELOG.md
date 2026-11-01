@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Generation
+  - `tfgen.yml` states its format, `version: "1"`; its JSON Schema is attached to each release.
+  - Examples of both module layouts: one module at one pin, and a module per component.
   - Compiles each stack's documents by its DSL's generator, through templates, in the document's order.
   - Writes the templates a stack names, and the providers they require.
   - Deletes the files a stack no longer produces.
@@ -10,6 +12,7 @@
   - Reads private schema links with the machine's credentials: GitHub release assets with `GH_TOKEN`, `GITHUB_TOKEN` or the `gh` login, `s3://` objects through the AWS command line, as the role an `assume_role` parameter names where it names one, other hosts with `.netrc`.
 - Command line
   - `tfgen` generates every stack of the repo; `--stack` names one, repeatable.
+  - `--version` and `-v` print the release, or `dev` for a local build.
   - Lists each changed stack's files as `terramate generate` does, then how many of the stacks compared changed.
   - `--schema` and `TFGEN_SCHEMA` name a DSL's schema for one run, ahead of its documents' modelines.
   - Reports errors as a compiler does, with the source around them, in color on a terminal, divided to its width; `--color` and `--no-color` decide it.
