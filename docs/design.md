@@ -127,6 +127,7 @@ A generator compiles one DSL. `tfgen.yml` gives it by the DSL's id in `yaml-dsl.
 | Field | Holds |
 |---|---|
 | `written_to` | the generated file the generator writes, in the stack's directory |
+| `schema` | where the schema is when a document's modeline names none on disk: a path or a URL, as `schema_search_paths` writes one, with refs |
 | `builtin_values` | by builtin of the DSL's logical scopes, the value it takes for a stack, as a ref |
 | `data_files` | JSONPaths of fields whose values name files the stack reads |
 | `values` | values computed once per stack, for templates to read |
@@ -240,6 +241,49 @@ output "orders_url" {
 
 - `name` comes from the key `name mock-orders`, by the validator's `child_values_from_parent_key`, as the editor reads it.
 - `kms_key` is a reference of scope `ENTRY`, written through the `references` template.
+
+### Schema
+
+`tfgen` finds and reads every document's schema and hands it to the compiler, which is pure code and reads none itself. A document is compiled against the schema the editor reads for it, found in this order:
+
+1. the schema named for the run, by `--schema` or `TFGEN_SCHEMA`, for working on a schema locally;
+2. its modeline, when the path it names is on disk, or when it names a URL;
+3. the generator's `schema`, a list in `schema_search_paths`' grammar with refs filled for the stack, the first entry found taken;
+4. the DSL's `schema_search_paths`, for a generator with no `schema`.
+
+A path is relative to the document, or to the config's folder when it starts with `{config_root}`, and a search path's steps may hold `*`, matching within one step, the first file in path order taken. A modeline's path is the path it writes.
+
+A URL is read by the editor's rules for schema URLs: `yaml_dsl_max_age_days`, the check with `ETag` and `Last-Modified`, and the kept copy when the source does not answer. Its copies are kept in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-urls`, else `~/Library/Caches/tfgen/schema-urls` on macOS and `~/.cache/tfgen/schema-urls` elsewhere. A private link is read with the machine's credentials:
+
+| Link | Read | Credentials, tried in order |
+|---|---|---|
+| a GitHub release asset, `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>` | through GitHub's API: the release by its tag, then the asset by its id, following GitHub's redirect without the token | `GH_TOKEN`, `GITHUB_TOKEN`, the `gh` command's login (`gh auth token`), then the `.netrc` entry for `api.github.com` |
+| an S3 object, `s3://<bucket>/<key>`, or `s3://<bucket>/<key>?assume_role=<role ARN>` | through the AWS command line, `aws s3api get-object`; with `assume_role`, as that role, assumed first with `aws sts assume-role` | the machine's AWS credentials: `AWS_PROFILE` and the other variables, `~/.aws` profiles with SSO, or a role |
+| any other `http(s)` link | as written | the `.netrc` entry for its host, sent as Basic auth |
+
+- `.netrc` is the file `NETRC` names, else the one in the user's home folder.
+- A refused credential gives way to the next. Every credential refused before one is let in, or all of them with the kept copy read instead, is a warning naming where the credential came from and what renews it, such as `run aws sso login`. All refused with no kept copy is an error placed at the entry or modeline that named the link, with each refusal's reason and the fixes as its help; for a link `--schema` or `TFGEN_SCHEMA` names, the error names them.
+- A GitHub token is asked for once per run, so a renewed login is read on the next.
+
+A schema published with each release of the modules a stack pins takes two entries: the copy a stack's own `terraform init` keeps, and the release asset, for a stack not initialized yet:
+
+```yaml
+schema:
+  - .terraform/modules/*/mock.schema.json
+  - "https://github.com/mock-org/mock-modules/releases/download/v{{stack.modules_version}}/mock.schema.json"
+```
+
+An S3 bucket serves the same way, a key per release, read as a role where the machine's own identity is not admitted to the bucket:
+
+```yaml
+schema:
+  - .terraform/modules/*/mock.schema.json
+  - "s3://mock-schemas/mock-modules/{{stack.modules_version}}/mock.schema.json?assume_role={{tfgen.mock_role}}"
+```
+
+- A DSL's schema is either published at a URL or already on local disk when `tfgen` runs: `tfgen` downloads no module or package to find it.
+- The schema holds the DSL's function table as well as its rules, so a document is never compiled without one.
+- What reading a schema warns of, such as a credential refused, is reported once per run as a warning, and the stack is still generated.
 
 ### Blocks
 
@@ -495,10 +539,37 @@ A function is called in a key, `<name> fn.<function>:` for one argument and `<na
 ```sh
 tfgen                           # every stack of the repo holding the working directory, tracked or not
 tfgen --stack services/mock-api # one stack, repeatable
+tfgen --no-color                # no color, where the output is a terminal
+tfgen --schema mock-dsl=../mock-modules/mock.schema.json  # a DSL's schema for this run, repeatable
+TFGEN_SCHEMA=mock-dsl=../mock-modules/mock.schema.json tfgen  # the same, pairs separated by commas
 ```
 
 - `tfgen` writes a file only where its contents change.
-- Every error names its file, line and column. A stack with an error gets no files, and the run exits non-zero.
+- A stack with an error gets no files, and the run exits non-zero. A stack's errors are reported in file order, then a line counting them.
+- An error is reported as a compiler reports one:
+
+  ```
+  error: field `brnch` is not allowed
+    --> services/mock-api/mock-dsl.yml:57:5
+     |
+  52 | workflow:
+  53 |   publish:
+  ...
+  56 |     branch: main
+  57 |     brnch: main
+     |     ^^^^^ `publish` has no field `brnch`
+  58 |     triggers:
+  59 |       push:
+     |
+     = rule: unevaluatedProperties, at mock.schema.json#/$defs/workflow/unevaluatedProperties
+     = help: did you mean `branch`?
+  ```
+
+  The source shows two lines on each side of the wrong one, and above them each line it is nested under. An error is placed at the text that caused it: a document's, a template's, `tfgen.yml`'s or a stack descriptor's. A misspelt name carries the closest one the compiler suggests as its help.
+- A template's refs to `each` and `reference` are checked when the config is read: each root is read only in the templates filled with it, and only for its fields.
+- A report's lines divide to the terminal's width as the devops SDK lays a record out: nothing is cut, a line divides where the Unicode line breaking rules allow and after a machine string's separator, never inside a comparison, what wraps continues one level in, and where a row has no room its indentation gives first. A wrapped source line is underlined once, under the row the wrong text ends on, and a label that does not fit beside the underline takes its own rows under it. Output that is not a terminal is never divided.
+- Color is on where the output is a terminal and `NO_COLOR` is unset; `--color` and `--no-color` decide it.
+- `--schema` and `TFGEN_SCHEMA` name, by DSL id, the schema the run reads that DSL's documents against, ahead of their modelines; a flag wins over the variable for the DSL it names, and a path is read from the working directory. A document's modeline is never changed for it.
 - A generated file a stack no longer produces is deleted, so a stack's files always match its documents. Only a file carrying `tfgen`'s header, in a stack the run generates, is ever deleted.
 
 ## Performance

@@ -3,10 +3,10 @@
 
 use yaml_dsl_compiler::Diagnostic;
 use yaml_dsl_compiler::output::{Expression, FunctionCall, Interpolation, ObjectKey, TemplatePart};
-use yaml_dsl_compiler::resolved::{self, MapEntry, Reference, Target, Value, ValueKind};
+use yaml_dsl_compiler::resolved::{self, Reference, Target, Value, ValueKind};
 
 use crate::config_files::ReferenceRule;
-use crate::ref_scope::RefFrame;
+use crate::ref_scope::{FixedRoot, RefFrame};
 use crate::template_filling::fill_expression;
 
 pub struct ValueWriter<'w> {
@@ -96,22 +96,13 @@ impl<'w> ValueWriter<'w> {
             })?;
         let position = &value.position;
         let text = |text: &str| Value::string(text, position.clone());
-        let entry = |key: &str, value: Value| MapEntry {
-            key: key.to_owned(),
-            key_position: position.clone(),
-            value,
-        };
         let scope_key = match &reference.scope_key {
             Some(scope_key) => text(scope_key),
             None => Value::new(ValueKind::Null, position.clone()),
         };
-        let reference_value = Value::new(
-            ValueKind::Map(vec![
-                entry("scope_key", scope_key),
-                entry("name", text(&reference.name)),
-                entry("path", text(&reference.path)),
-            ]),
-            position.clone(),
+        let reference_value = FixedRoot::Reference.value(
+            position,
+            vec![scope_key, text(&reference.name), text(&reference.path)],
         );
         let frame = self.frame.with_reference(&reference_value);
         fill_expression(&rule.template, &frame, self)

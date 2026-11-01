@@ -4,12 +4,109 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use yaml_dsl_compiler::resolved::{Value, ValueKind};
+use yaml_dsl_compiler::resolved::{MapEntry, Value, ValueKind};
 use yaml_dsl_compiler::{Diagnostic, Node, Position};
 
 use crate::config_files::ValueRule;
+use crate::error_report::did_you_mean;
 use crate::ref_paths::{RefPath, RefStep};
 use crate::yaml_values::{evaluate_node, evaluate_value_rule};
+
+/// A root whose fields tfgen fixes: what `each` holds for each kind of block, and
+/// what `reference` holds. Its value is built from these fields, and a template's
+/// refs to it are checked against them when the config is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FixedRoot {
+    DeclarationEach,
+    ScopeKeyEach,
+    EntryEach,
+    Reference,
+}
+
+impl FixedRoot {
+    /// The roots a block's `each` names, in the order its error lists them.
+    pub const BLOCK_EACH_ROOTS: [FixedRoot; 3] = [
+        FixedRoot::DeclarationEach,
+        FixedRoot::ScopeKeyEach,
+        FixedRoot::EntryEach,
+    ];
+
+    /// The name a ref reads the root by.
+    pub fn root_name(self) -> &'static str {
+        match self {
+            FixedRoot::Reference => "reference",
+            _ => "each",
+        }
+    }
+
+    /// The value a block's `each` takes to fill its template with this root.
+    pub fn block_each_kind(self) -> Option<&'static str> {
+        match self {
+            FixedRoot::DeclarationEach => Some("declaration"),
+            FixedRoot::ScopeKeyEach => Some("scope_key"),
+            FixedRoot::EntryEach => Some("entry"),
+            FixedRoot::Reference => None,
+        }
+    }
+
+    pub fn fields(self) -> &'static [&'static str] {
+        match self {
+            FixedRoot::DeclarationEach => &["scope_key", "name", "value"],
+            FixedRoot::ScopeKeyEach => &["name", "declarations"],
+            FixedRoot::EntryEach => &["key", "value"],
+            FixedRoot::Reference => &["scope_key", "name", "path"],
+        }
+    }
+
+    /// The root's value: its fields, in the order `fields` lists them, holding
+    /// `values`.
+    pub fn value(self, position: &Position, values: Vec<Value>) -> Value {
+        assert_eq!(
+            values.len(),
+            self.fields().len(),
+            "{self:?} takes one value per field"
+        );
+        let entries = self
+            .fields()
+            .iter()
+            .zip(values)
+            .map(|(field, value)| MapEntry {
+                key: (*field).to_owned(),
+                key_position: position.clone(),
+                value,
+            })
+            .collect();
+        Value::new(ValueKind::Map(entries), position.clone())
+    }
+}
+
+/// A ref reading a key the value it reads from does not hold.
+pub fn absent_key(
+    path: &RefPath,
+    holder: &str,
+    key: &str,
+    held: &[String],
+    position: &Position,
+) -> Diagnostic {
+    Diagnostic::at(position, format!("`{path}` reads a key that is not there"))
+        .with_label(format!("`{holder}` holds no `{key}`"))
+        .with_help(did_you_mean(key, held))
+}
+
+/// A ref reading a root the text it stands in is not filled with.
+pub fn unread_root(path: &RefPath, roots: &[String], position: &Position) -> Diagnostic {
+    let read = roots
+        .iter()
+        .map(|root| format!("`{root}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Diagnostic::at(
+        position,
+        format!("`{path}` reads a root that is not read here"),
+    )
+    .with_label(format!("this text reads {read}, and no `{}`", path.root))
+    .with_help(did_you_mean(&path.root, roots))
+}
 
 /// A stack's roots: `stack`, its descriptor's globals and builtins, and `tfgen`,
 /// the config's globals, each computed once, when first read.
@@ -154,14 +251,24 @@ impl<'f> RefFrame<'f> {
         }
     }
 
+    /// The roots a ref reads here.
+    fn root_names(&self) -> Vec<String> {
+        let mut roots = vec!["stack", "tfgen"];
+        if self.generator.is_some() {
+            roots.extend(["fold", "values"]);
+        }
+        if self.each.is_some() {
+            roots.push("each");
+        }
+        if self.reference.is_some() {
+            roots.push("reference");
+        }
+        roots.into_iter().map(str::to_owned).collect()
+    }
+
     /// The value `path` names, or `None` where an optional key is absent.
     pub fn read(&self, path: &RefPath, position: &Position) -> Result<Option<Value>, Diagnostic> {
-        let missing_root = || {
-            Diagnostic::at(
-                position,
-                format!("`{path}`: no root `{}` is read here", path.root),
-            )
-        };
+        let missing_root = || unread_root(path, &self.root_names(), position);
         let (start, steps) = match path.root.as_str() {
             "stack" => (Some(self.stack.stack.clone()), &path.steps[..]),
             "fold" => (
@@ -184,28 +291,36 @@ impl<'f> RefFrame<'f> {
                     ));
                 };
                 let (name, required) = self.step_key(first, path, position)?;
-                let value = if path.root == "tfgen" {
-                    self.stack.global(&name, position)?
+                let (value, held): (_, Vec<&String>) = if path.root == "tfgen" {
+                    let held = self.stack.tfgen_globals.iter().map(|(name, _)| name);
+                    (self.stack.global(&name, position)?, held.collect())
                 } else {
                     let generator = self.generator.ok_or_else(missing_root)?;
-                    generator.value(&name, position, self.stack)?
+                    let held = generator.value_rules.iter().map(|(name, _)| name);
+                    (
+                        generator.value(&name, position, self.stack)?,
+                        held.collect(),
+                    )
                 };
                 if value.is_none() && required {
-                    return Err(Diagnostic::at(
-                        position,
-                        format!("`{path}`: {} holds no `{name}`", path.root),
-                    ));
+                    let held: Vec<String> = held.into_iter().cloned().collect();
+                    return Err(absent_key(path, &path.root, &name, &held, position));
                 }
                 (value, rest)
             }
             _ => return Err(missing_root()),
         };
+        let read_before = path.steps.len() - steps.len();
         let mut current = start;
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             let Some(value) = current else {
                 return Ok(None);
             };
-            current = self.step(&value, step, path, position)?;
+            let holder = RefPath {
+                root: path.root.clone(),
+                steps: path.steps[..read_before + index].to_vec(),
+            };
+            current = self.step(&value, step, path, &holder, position)?;
         }
         Ok(current)
     }
@@ -240,6 +355,7 @@ impl<'f> RefFrame<'f> {
         value: &Value,
         step: &RefStep,
         path: &RefPath,
+        holder: &RefPath,
         position: &Position,
     ) -> Result<Option<Value>, Diagnostic> {
         let (key, required) = self.step_key(step, path, position)?;
@@ -258,10 +374,13 @@ impl<'f> RefFrame<'f> {
             }
         };
         if found.is_none() && required {
-            return Err(Diagnostic::at(
-                position,
-                format!("`{path}`: no `{key}` is there"),
-            ));
+            let held: Vec<String> = value
+                .entries()
+                .unwrap_or_default()
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect();
+            return Err(absent_key(path, &holder.to_string(), &key, &held, position));
         }
         Ok(found)
     }

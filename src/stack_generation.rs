@@ -8,13 +8,19 @@ use yaml_dsl_compiler::json_path::PathStep;
 use yaml_dsl_compiler::output::{BodyItem, OutputFile};
 use yaml_dsl_compiler::resolved::{Declared, MapEntry, Value, ValueKind};
 use yaml_dsl_compiler::writer::write_file;
-use yaml_dsl_compiler::{BuiltinValues, Diagnostic, Position, ResolvedUnit, TargetLanguage, Unit};
+use yaml_dsl_compiler::{
+    BuiltinValues, Diagnostic, Position, ResolveOptions, ResolvedUnit, TargetLanguage, Unit,
+};
 
 use crate::config_files::{
     BlockRule, BlockSelection, DeclaredDsl, Generator, LoadedConfig, TfgenConfig,
 };
+use crate::error_report::did_you_mean;
 use crate::generated_files::header_comment;
-use crate::ref_scope::{GeneratorContext, RefFrame, StackContext};
+use crate::ref_scope::{FixedRoot, GeneratorContext, RefFrame, StackContext};
+use crate::schema_lookup::{SchemaSource, StackSchemas};
+use crate::schema_overrides::SchemaOverrides;
+use crate::schema_url_copies::SchemaUrlCopies;
 use crate::stack_discovery::git_files;
 use crate::template_filling::fill_body;
 use crate::value_writing::ValueWriter;
@@ -39,12 +45,18 @@ pub struct StackJob<'c> {
     pub globals: Value,
     pub config: &'c LoadedConfig,
     pub repository_root: &'c Path,
+    /// By DSL id, the schema this run reads the DSL's documents against.
+    pub schema_overrides: &'c SchemaOverrides,
+    /// Schema URLs read this run, with the copies kept of them.
+    pub schema_urls: &'c SchemaUrlCopies,
 }
 
 /// The files a stack's generation writes, by path.
 pub struct StackFiles {
     pub directory: PathBuf,
     pub files: Vec<(PathBuf, String)>,
+    /// What generating the stack warns of without failing it.
+    pub warnings: Vec<Diagnostic>,
 }
 
 struct CompiledDocument<'c> {
@@ -107,7 +119,17 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
             ));
             continue;
         }
-        match compile_document(dsl, document, generator, &early_context) {
+        let schema_override = job.schema_overrides.get(&dsl.id).map(String::as_str);
+        let compiled_document = compile_document(
+            dsl,
+            document,
+            generator,
+            &early_context,
+            schema_override,
+            job.schema_urls,
+            &job.config.directory,
+        );
+        match compiled_document {
             Ok(Some(resolved)) => compiled.push(CompiledDocument {
                 generator,
                 resolved,
@@ -174,6 +196,10 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
     Ok(StackFiles {
         directory: job.directory.clone(),
         files,
+        warnings: compiled
+            .iter()
+            .flat_map(|document| document.resolved.warnings.iter().cloned())
+            .collect(),
     })
 }
 
@@ -199,10 +225,17 @@ fn named_templates<'t>(
                 .iter()
                 .find(|(name, _)| *name == entry.key)
                 .ok_or_else(|| {
+                    let declared: Vec<String> = tfgen
+                        .stack_templates
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect();
                     Diagnostic::at(
                         &entry.key_position,
-                        format!("tfgen.yml declares no template `{}`", entry.key),
+                        format!("template `{}` is not declared", entry.key),
                     )
+                    .with_label(format!("tfgen.yml declares no template `{}`", entry.key))
+                    .with_help(did_you_mean(&entry.key, &declared))
                 })?;
             Ok((name.as_str(), template, entry.value.clone()))
         })
@@ -304,6 +337,9 @@ fn compile_document(
     document: &Path,
     generator: &Generator,
     context: &StackContext<'_>,
+    schema_override: Option<&str>,
+    url_copies: &SchemaUrlCopies,
+    config_root: &Path,
 ) -> Result<Option<ResolvedUnit>, Vec<Diagnostic>> {
     let compiler = dsl
         .generated
@@ -327,8 +363,49 @@ fn compile_document(
                 dsl.id
             ))]
         })?;
-    let resolved = compiler.resolve_with_builtins(&unit, &StackBuiltins(builtins))?;
+    let generator_schema = match &generator.schema {
+        Some(node) => Some(schema_entries(node, &frame).map_err(|diagnostic| vec![diagnostic])?),
+        None => None,
+    };
+    let schemas = StackSchemas {
+        config_root,
+        run_schema: schema_override,
+        search_paths: generator_schema.as_deref().unwrap_or(&dsl.search_paths),
+        url_copies,
+    };
+    let options = ResolveOptions {
+        builtins: Some(&StackBuiltins(builtins)),
+        schema_provider: Some(&schemas),
+    };
+    let resolved = compiler.resolve_with(&unit, &options)?;
     Ok((!resolved.fragment).then_some(resolved))
+}
+
+/// A generator's `schema` list, its refs filled for the stack, each entry with
+/// where it was written.
+fn schema_entries(
+    node: &yaml_dsl_compiler::Node,
+    frame: &RefFrame<'_>,
+) -> Result<Vec<SchemaSource>, Diagnostic> {
+    let not_a_list = || {
+        Diagnostic::at(
+            &node.position,
+            "`schema` lists paths, path patterns and URLs, the first found taken",
+        )
+    };
+    let entries = evaluate_node(node, frame)?.ok_or_else(not_a_list)?;
+    entries
+        .items()
+        .ok_or_else(not_a_list)?
+        .iter()
+        .map(|entry| {
+            let location = entry.as_str().ok_or_else(not_a_list)?;
+            Ok(SchemaSource {
+                location: location.to_owned(),
+                written_at: entry.position.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The files the stack reads, from its directory: its documents, the files its
@@ -558,12 +635,9 @@ fn selected_parts(
                     Some(PathStep::Index(index)) => index.to_string(),
                     None => String::new(),
                 };
-                let each = map_value(
+                let each = FixedRoot::EntryEach.value(
                     &value.position,
-                    vec![
-                        ("key", Value::string(key, value.position.clone())),
-                        ("value", value.clone()),
-                    ],
+                    vec![Value::string(key, value.position.clone()), value.clone()],
                 );
                 (steps, each)
             })
@@ -577,15 +651,12 @@ fn declaration_value(declared: &Declared) -> Value {
         Some(scope_key) => Value::string(scope_key.clone(), position.clone()),
         None => Value::new(ValueKind::Null, position.clone()),
     };
-    map_value(
+    FixedRoot::DeclarationEach.value(
         position,
         vec![
-            ("scope_key", scope_key),
-            (
-                "name",
-                Value::string(declared.name.clone(), position.clone()),
-            ),
-            ("value", declared.value.clone()),
+            scope_key,
+            Value::string(declared.name.clone(), position.clone()),
+            declared.value.clone(),
         ],
     )
 }
@@ -605,12 +676,9 @@ fn scope_key_value(scope_key: &str, members: &[&Declared]) -> Value {
         ),
         position.clone(),
     );
-    map_value(
+    FixedRoot::ScopeKeyEach.value(
         position,
-        vec![
-            ("name", Value::string(scope_key, position.clone())),
-            ("declarations", declarations),
-        ],
+        vec![Value::string(scope_key, position.clone()), declarations],
     )
 }
 
@@ -678,22 +746,6 @@ fn template_files(
     } else {
         Err(diagnostics)
     }
-}
-
-fn map_value(position: &Position, entries: Vec<(&str, Value)>) -> Value {
-    Value::new(
-        ValueKind::Map(
-            entries
-                .into_iter()
-                .map(|(key, value)| MapEntry {
-                    key: key.to_owned(),
-                    key_position: position.clone(),
-                    value,
-                })
-                .collect(),
-        ),
-        position.clone(),
-    )
 }
 
 /// `value`, a map, with `entries` set over its own.

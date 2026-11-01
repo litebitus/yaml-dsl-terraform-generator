@@ -11,6 +11,10 @@ use yaml_dsl_compiler::yaml_reader::parse;
 use yaml_dsl_compiler::{Compiler, Diagnostic, DslDefinition, Entry, Node, NodeKind, Position};
 
 use crate::disk_source::DiskSource;
+use crate::error_report::did_you_mean;
+use crate::ref_scope::FixedRoot;
+use crate::schema_lookup::SchemaSource;
+use crate::template_filling::check_fixed_roots;
 
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
@@ -29,6 +33,8 @@ pub struct DeclaredDsl {
     pub id: String,
     pub selection: Compiler,
     pub generated: Option<Compiler>,
+    /// The DSL's `schema_search_paths`, as the editor reads them.
+    pub search_paths: Vec<SchemaSource>,
 }
 
 pub struct TfgenConfig {
@@ -43,6 +49,9 @@ pub struct Generator {
     pub dsl_id: String,
     pub position: Position,
     pub written_to: String,
+    /// Where the schema is, when a document's modeline names none on disk: a list
+    /// of paths, path patterns and URLs, each with refs, the first found taken.
+    pub schema: Option<Node>,
     pub builtin_values: Vec<(String, Node)>,
     pub data_files: Vec<PathPattern>,
     pub values: Vec<(String, ValueRule)>,
@@ -127,7 +136,10 @@ impl LoadedConfig {
             let selection_block = serde_json::json!({
                 "id": id,
                 "file_includes": json["file_includes"],
-                "file_excludes": json.get("file_excludes").cloned().unwrap_or(serde_json::json!([])),
+                "file_excludes": json
+                    .get("file_excludes")
+                    .cloned()
+                    .unwrap_or(serde_json::json!([])),
             });
             let compiler = |json: &serde_json::Value| {
                 let definition = DslDefinition::from_json(json).map_err(|message| {
@@ -143,22 +155,38 @@ impl LoadedConfig {
             } else {
                 None
             };
+            let search_paths = block
+                .get("schema_search_paths")
+                .and_then(Node::items)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|entry| {
+                    entry.as_str().map(|location| SchemaSource {
+                        location: location.to_owned(),
+                        written_at: entry.position.clone(),
+                    })
+                })
+                .collect();
             dsls.push(DeclaredDsl {
                 id,
                 selection,
                 generated,
+                search_paths,
             });
         }
         if let Some(tfgen) = &tfgen {
             for generator in &tfgen.generators {
                 if !dsls.iter().any(|dsl| dsl.id == generator.dsl_id) {
+                    let ids: Vec<String> = dsls.iter().map(|dsl| dsl.id.clone()).collect();
                     return Err(Diagnostic::at(
                         &generator.position,
-                        format!(
-                            "generator `{}` names no DSL of {DSL_CONFIG_FILE}",
-                            generator.dsl_id
-                        ),
-                    ));
+                        format!("generator `{}` names no DSL", generator.dsl_id),
+                    )
+                    .with_label(format!(
+                        "{DSL_CONFIG_FILE} declares no DSL `{}`",
+                        generator.dsl_id
+                    ))
+                    .with_help(did_you_mean(&generator.dsl_id, &ids)));
                 }
             }
         }
@@ -193,14 +221,20 @@ fn located(error: Diagnostic, position: &Position, id: &str) -> Diagnostic {
 }
 
 pub fn read_yaml(file: &Path) -> Result<Node, Diagnostic> {
+    Ok(read_yaml_text(file)?.0)
+}
+
+/// A YAML file's tree, and its text.
+fn read_yaml_text(file: &Path) -> Result<(Node, String), Diagnostic> {
     let text = fs::read_to_string(file)
         .map_err(|error| Diagnostic::unplaced(format!("reading {}: {error}", file.display())))?;
-    parse(&Arc::from(file.to_string_lossy().as_ref()), &text, &[])
+    let root = parse(&Arc::from(file.to_string_lossy().as_ref()), &text, &[])?;
+    Ok((root, text))
 }
 
 impl TfgenConfig {
     fn read(file: &Path, directory: &Path) -> Result<Self, Diagnostic> {
-        let root = read_yaml(file)?;
+        let (root, source) = read_yaml_text(file)?;
         let mut config = MapReader::new(&root, "tfgen.yml")?;
         let descriptor_names = match config.optional("stacks") {
             Some(stacks) => {
@@ -221,7 +255,7 @@ impl TfgenConfig {
         let mut generators = Vec::new();
         if let Some(listed) = config.optional("generators") {
             for entry in entries(listed, "`generators`")? {
-                generators.push(Generator::read(entry, directory)?);
+                generators.push(Generator::read(entry, directory, &source)?);
             }
         }
         let mut stack_templates = Vec::new();
@@ -242,10 +276,11 @@ impl TfgenConfig {
 }
 
 impl Generator {
-    fn read(entry: &Entry, directory: &Path) -> Result<Self, Diagnostic> {
+    fn read(entry: &Entry, directory: &Path, source: &str) -> Result<Self, Diagnostic> {
         let what = format!("generator `{}`", entry.key);
         let mut generator = MapReader::new(&entry.value, &what)?;
         let written_to = text(generator.required("written_to")?, "`written_to`")?;
+        let schema = generator.optional("schema").cloned();
         let builtin_values = match generator.optional("builtin_values") {
             Some(values) => entries(values, "`builtin_values`")?
                 .iter()
@@ -275,7 +310,7 @@ impl Generator {
         let mut references = Vec::new();
         if let Some(listed) = generator.optional("references") {
             for reference in items(listed, "`references`")? {
-                references.push(ReferenceRule::read(reference)?);
+                references.push(ReferenceRule::read(reference, source)?);
             }
         }
         generator.finish()?;
@@ -283,6 +318,7 @@ impl Generator {
             dsl_id: entry.key.clone(),
             position: entry.key_position.clone(),
             written_to,
+            schema,
             builtin_values,
             data_files,
             values,
@@ -328,26 +364,24 @@ impl BlockRule {
         let scope = |block: &mut MapReader<'_>| -> Result<String, Diagnostic> {
             text(block.required("scope")?, "`scope`")
         };
-        let selection = match block.optional("each") {
+        let each_root = match block.optional("each") {
+            None => None,
+            Some(each) => Some(block_each_root(each)?),
+        };
+        let selection = match each_root {
             None => BlockSelection::Once,
-            Some(each) => match text(each, "`each`")?.as_str() {
-                "declaration" => BlockSelection::Declaration {
-                    scope: scope(&mut block)?,
-                },
-                "scope_key" => BlockSelection::ScopeKey {
-                    scope: scope(&mut block)?,
-                },
-                "entry" => BlockSelection::Entry {
-                    path: json_path(block.required("path")?)?,
-                },
-                other => {
-                    return Err(Diagnostic::at(
-                        &each.position,
-                        format!("`each: {other}` is not declaration, scope_key or entry"),
-                    ));
-                }
+            Some(FixedRoot::DeclarationEach) => BlockSelection::Declaration {
+                scope: scope(&mut block)?,
+            },
+            Some(FixedRoot::ScopeKeyEach) => BlockSelection::ScopeKey {
+                scope: scope(&mut block)?,
+            },
+            Some(FixedRoot::EntryEach | FixedRoot::Reference) => BlockSelection::Entry {
+                path: json_path(block.required("path")?)?,
             },
         };
+        let fixed_roots: Vec<FixedRoot> = each_root.into_iter().collect();
+        check_fixed_roots(&template, &fixed_roots, GENERATOR_ROOTS)?;
         let scope_keys = match block.optional("scope_keys") {
             Some(keys) => Some(texts(keys, "`scope_keys`")?),
             None => None,
@@ -372,7 +406,7 @@ impl BlockRule {
 }
 
 impl ReferenceRule {
-    fn read(node: &Node) -> Result<Self, Diagnostic> {
+    fn read(node: &Node, source: &str) -> Result<Self, Diagnostic> {
         let mut rule = MapReader::new(node, "a reference")?;
         let scope = text(rule.required("scope")?, "`scope`")?;
         let scope_keys = match rule.optional("scope_keys") {
@@ -386,8 +420,9 @@ impl ReferenceRule {
         let template_node = rule.required("template")?;
         let template = TemplateText {
             text: text(template_node, "`template`")?,
-            start: template_node.position.clone(),
+            start: text_start(template_node, source),
         };
+        check_fixed_roots(&template, &[FixedRoot::Reference], GENERATOR_ROOTS)?;
         rule.finish()?;
         Ok(Self {
             scope,
@@ -403,6 +438,7 @@ impl StackTemplate {
         let what = format!("template `{}`", entry.key);
         let mut template = MapReader::new(&entry.value, &what)?;
         let file = template_file(template.required("file")?, directory)?;
+        check_fixed_roots(&file, &[], STACK_ROOTS)?;
         let written_to = text(template.required("written_to")?, "`written_to`")?;
         let required_providers = match template.optional("required_providers") {
             Some(providers) => entries(providers, "`required_providers`")?
@@ -420,14 +456,72 @@ impl StackTemplate {
     }
 }
 
+/// The roots every template reads.
+const STACK_ROOTS: &[&str] = &["stack", "tfgen"];
+
+/// The roots a generator's templates read, beside `each` and `reference`.
+const GENERATOR_ROOTS: &[&str] = &["stack", "tfgen", "fold", "values"];
+
+/// The root a block's `each` names.
+fn block_each_root(each: &Node) -> Result<FixedRoot, Diagnostic> {
+    let kind = text(each, "`each`")?;
+    let kinds: Vec<String> = FixedRoot::BLOCK_EACH_ROOTS
+        .iter()
+        .filter_map(|root| root.block_each_kind())
+        .map(str::to_owned)
+        .collect();
+    FixedRoot::BLOCK_EACH_ROOTS
+        .into_iter()
+        .find(|root| root.block_each_kind() == Some(kind.as_str()))
+        .ok_or_else(|| {
+            let listed = kinds
+                .iter()
+                .map(|kind| format!("`{kind}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Diagnostic::at(&each.position, format!("`{kind}` is not an allowed value"))
+                .with_label(format!("`each` is one of {listed}"))
+                .with_help(did_you_mean(&kind, &kinds))
+        })
+}
+
+/// Where a scalar's text starts in its file: past its opening quote, where it is
+/// quoted.
+fn text_start(node: &Node, source: &str) -> Position {
+    let position = &node.position;
+    let quoted = source
+        .lines()
+        .nth(position.line.saturating_sub(1))
+        .and_then(|line| line.chars().nth(position.column.saturating_sub(1)))
+        .is_some_and(|character| matches!(character, '"' | '\''));
+    if quoted {
+        Position::new(&position.file, position.line, position.column + 1)
+    } else {
+        position.clone()
+    }
+}
+
+/// What a node is, for a report of a node of the wrong kind.
+fn kind_of(node: &Node) -> &'static str {
+    match node.kind {
+        NodeKind::Null => "null",
+        NodeKind::Bool(_) => "a boolean",
+        NodeKind::Number(_) => "a number",
+        NodeKind::String(_) => "text",
+        NodeKind::List(_) => "a list",
+        NodeKind::Map(_) => "a map",
+    }
+}
+
 fn template_file(node: &Node, directory: &Path) -> Result<TemplateText, Diagnostic> {
     let relative = text(node, "a template file")?;
     let file = directory.join(&relative);
     let text = fs::read_to_string(&file).map_err(|error| {
         Diagnostic::at(
             &node.position,
-            format!("reading template {relative}: {error}"),
+            format!("template file {relative} cannot be read"),
         )
+        .with_label(error.to_string())
     })?;
     Ok(TemplateText {
         text,
@@ -478,7 +572,7 @@ struct MapReader<'n> {
 impl<'n> MapReader<'n> {
     fn new(node: &'n Node, what: &str) -> Result<Self, Diagnostic> {
         if !node.is_map() {
-            return Err(Diagnostic::at(&node.position, format!("{what} is a map")));
+            return Err(not_a(node, what, "a map"));
         }
         Ok(Self {
             node,
@@ -494,37 +588,46 @@ impl<'n> MapReader<'n> {
 
     fn required(&mut self, key: &'static str) -> Result<&'n Node, Diagnostic> {
         let what = self.what.clone();
-        self.optional(key)
-            .ok_or_else(|| Diagnostic::at(&self.node.position, format!("{what} needs `{key}`")))
+        self.optional(key).ok_or_else(|| {
+            Diagnostic::at(&self.node.position, format!("field `{key}` is required"))
+                .with_label(format!("{what} has no field `{key}`"))
+        })
     }
 
     fn finish(self) -> Result<(), Diagnostic> {
         for entry in self.node.entries().unwrap_or_default() {
             if !self.read.contains(&entry.key.as_str()) {
+                let fields: Vec<String> = self.read.iter().map(|key| (*key).to_owned()).collect();
                 return Err(Diagnostic::at(
                     &entry.key_position,
-                    format!("{} has no field `{}`", self.what, entry.key),
-                ));
+                    format!("field `{}` is not allowed", entry.key),
+                )
+                .with_label(format!("{} has no field `{}`", self.what, entry.key))
+                .with_help(did_you_mean(&entry.key, &fields)));
             }
         }
         Ok(())
     }
 }
 
+/// A node of the wrong kind: what it should be, and what it is.
+fn not_a(node: &Node, what: &str, expected: &str) -> Diagnostic {
+    Diagnostic::at(&node.position, format!("{what} is not {expected}"))
+        .with_label(format!("is {}", kind_of(node)))
+}
+
 fn entries<'n>(node: &'n Node, what: &str) -> Result<&'n [Entry], Diagnostic> {
-    node.entries()
-        .ok_or_else(|| Diagnostic::at(&node.position, format!("{what} is a map")))
+    node.entries().ok_or_else(|| not_a(node, what, "a map"))
 }
 
 fn items<'n>(node: &'n Node, what: &str) -> Result<&'n [Node], Diagnostic> {
-    node.items()
-        .ok_or_else(|| Diagnostic::at(&node.position, format!("{what} is a list")))
+    node.items().ok_or_else(|| not_a(node, what, "a list"))
 }
 
 fn text(node: &Node, what: &str) -> Result<String, Diagnostic> {
     node.as_str()
         .map(str::to_owned)
-        .ok_or_else(|| Diagnostic::at(&node.position, format!("{what} is text")))
+        .ok_or_else(|| not_a(node, what, "text"))
 }
 
 fn texts(node: &Node, what: &str) -> Result<Vec<String>, Diagnostic> {
@@ -541,6 +644,11 @@ fn json_path(node: &Node) -> Result<PathPattern, Diagnostic> {
 
 fn regex(node: &Node) -> Result<Regex, Diagnostic> {
     let pattern = text(node, "a pattern")?;
-    Regex::new(&pattern)
-        .map_err(|error| Diagnostic::at(&node.position, format!("pattern `{pattern}`: {error}")))
+    Regex::new(&pattern).map_err(|error| {
+        Diagnostic::at(
+            &node.position,
+            format!("pattern `{pattern}` is not a regular expression"),
+        )
+        .with_label(error.to_string())
+    })
 }

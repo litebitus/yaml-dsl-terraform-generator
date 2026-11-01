@@ -23,6 +23,8 @@ A YAML DSL over Terraform. A stack's author writes documents in the organization
 ```sh
 tfgen                           # every stack of the repo
 tfgen --stack services/mock-api # one stack, repeatable
+tfgen --no-color                # no color, where the output is a terminal
+tfgen --schema mock-dsl=../mock-modules/mock.schema.json  # a schema being changed locally
 ```
 
 ## Development
