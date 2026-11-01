@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.3 — 2026-11-01
+
 - Generation
   - Reads `yaml-dsl.yml` up to v1.2, through yaml-dsl-compiler 0.1.1 and yaml-dsl-spec 0.1.2.
 

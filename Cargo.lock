@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-terraform-generator"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
