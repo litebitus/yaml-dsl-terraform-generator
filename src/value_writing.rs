@@ -1,9 +1,9 @@
 //! A resolved value as HCL: scalars, lists and maps as themselves, a reference by
 //! the `references` template that matches it, and a call as a Terraform call.
 
-use yaml_dsl_compiler::Diagnostic;
 use yaml_dsl_compiler::output::{Expression, FunctionCall, Interpolation, ObjectKey, TemplatePart};
-use yaml_dsl_compiler::resolved::{self, Reference, Target, Value, ValueKind};
+use yaml_dsl_spec::Diagnostic;
+use yaml_dsl_spec::resolved::{self, Reference, Target, Value, ValueKind};
 
 use crate::config_files::ReferenceRule;
 use crate::ref_scope::{FixedRoot, RefFrame};

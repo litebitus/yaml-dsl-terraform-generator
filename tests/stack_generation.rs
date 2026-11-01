@@ -3,32 +3,55 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-const DSL_CONFIG: &str = r#"dsls:
+const DSL_CONFIG: &str = r#"version: "1"
+dsls:
   - id: mock-dsl
     file_includes: ["**/mock-dsl.yml"]
+    file_excludes: []
     schema_search_paths: ["{config_root}/mock.schema.json"]
     layers:
       overlay_folders: [dev]
       common_layer_discovery: ancestor
+      duplicate_check: { depth: 2, key_depths: {}, skip_keys: [locals] }
     placeholder:
       pattern: "\\$\\{(?<body>[^}\\n]*)\\}"
       unscanned_paths: []
     locals: { scope_name: local, path_separator: "." }
+    key_sort_orders: []
     scopes:
-      ENTRY: { regions: ["$"], named_by_parent_key: true }
-      GLOBAL: { regions: ["$"], builtin_names: [env] }
-      local: { regions: ["$"] }
+      ENTRY:
+        regions: ["$"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: true
+        builtin_names: []
+      GLOBAL:
+        regions: ["$"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: [env]
+      local:
+        regions: ["$"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: []
     declarations:
       - path: "$.locals.*"
+        skip_keys: []
+        exclude_candidates: []
         name_source: key
         key_token: first_word
         name_spelling: as_written
+        meta_argument_name: null
+        declares_every_name: false
         scope_name: local
       - path: "$.*.*"
         skip_keys: [locals, outputs]
+        exclude_candidates: []
         name_source: key
         key_token: last_word
         name_spelling: dashes_as_underscores
+        meta_argument_name: null
+        declares_every_name: false
         scope_name: ENTRY
     references:
       - pattern: "^ref (?<type>[a-z]+)\\.(?<name>[a-z0-9_]+)"
@@ -41,11 +64,13 @@ const DSL_CONFIG: &str = r#"dsls:
         positions: [whole_scalar, whole_placeholder, placeholder_in_text]
         text_after_name_allowed: true
         scope_name: local
+        scope_group: null
         name_group: name
       - pattern: "^(?<name>[a-z_]+)$"
         positions: [whole_placeholder, placeholder_in_text]
         text_after_name_allowed: false
         scope_name: GLOBAL
+        scope_group: null
         name_group: name
     validator:
       child_values_from_parent_key:
@@ -631,11 +656,27 @@ fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     }
     for (name, text) in configs {
         let node =
-            yaml_dsl_compiler::yaml_reader::parse(&Arc::from(name.as_str()), &text, &[]).unwrap();
+            yaml_dsl_spec::yaml_reader::parse(&Arc::from(name.as_str()), &text, &[]).unwrap();
         let errors: Vec<String> = validator
             .iter_errors(&node.to_json())
             .map(|error| format!("{error} at {}", error.instance_path()))
             .collect();
         assert!(errors.is_empty(), "{name}: {errors:?}");
     }
+}
+
+#[test]
+fn a_misspelt_field_of_the_dsl_definition_is_an_error_at_that_field() {
+    let workspace = MockWorkspace::new("definition-field");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "yaml-dsl.yml",
+        &DSL_CONFIG.replacen("    file_excludes: []", "    file_exclude: []", 1),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("--> yaml-dsl.yml:5:5"), "{errors}");
+    assert!(errors.contains("did you mean `file_excludes`?"), "{errors}");
+    assert!(!workspace.exists("stacks/dev/main.tf"));
 }

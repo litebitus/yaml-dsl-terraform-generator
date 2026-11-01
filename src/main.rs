@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use terminal_size::{Height, Width, terminal_size_of};
-use yaml_dsl_compiler::Diagnostic;
+use yaml_dsl_spec::Diagnostic;
 
 use crate::config_files::{DSL_CONFIG_FILE, LoadedConfig};
 use crate::disk_source::DiskSource;
@@ -316,9 +316,14 @@ fn run(
     }
     let mut succeeded = true;
     for (directory, result) in &configs {
-        if let Err(diagnostic) = result {
-            errors.diagnostic(diagnostic);
-            let file = match &diagnostic.position {
+        if let Err(diagnostics) = result {
+            for diagnostic in diagnostics {
+                errors.diagnostic(diagnostic);
+            }
+            let file = match diagnostics
+                .first()
+                .and_then(|first| first.position.as_ref())
+            {
                 Some(position) => shown(Path::new(position.file.as_ref()), &root),
                 None => shown(&directory.join(DSL_CONFIG_FILE), &root),
             };
@@ -425,7 +430,7 @@ fn run(
     Ok(succeeded)
 }
 
-type LoadedConfigs = BTreeMap<PathBuf, Result<LoadedConfig, Diagnostic>>;
+type LoadedConfigs = BTreeMap<PathBuf, Result<LoadedConfig, Vec<Diagnostic>>>;
 
 fn load_config(configs: &mut LoadedConfigs, directory: &Path, source: &Arc<DiskSource>) {
     configs

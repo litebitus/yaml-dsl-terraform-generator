@@ -4,13 +4,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use yaml_dsl_compiler::json_path::PathStep;
 use yaml_dsl_compiler::output::{BodyItem, OutputFile};
-use yaml_dsl_compiler::resolved::{Declared, MapEntry, Value, ValueKind};
 use yaml_dsl_compiler::writer::write_file;
-use yaml_dsl_compiler::{
-    BuiltinValues, Diagnostic, Position, ResolveOptions, ResolvedUnit, TargetLanguage, Unit,
-};
+use yaml_dsl_compiler::{BuiltinValues, ResolveOptions, ResolvedUnit, TargetLanguage, Unit};
+use yaml_dsl_spec::json_path::PathStep;
+use yaml_dsl_spec::resolved::{Declared, MapEntry, Value, ValueKind};
+use yaml_dsl_spec::{Diagnostic, Position};
 
 use crate::config_files::{
     BlockRule, BlockSelection, DeclaredDsl, Generator, LoadedConfig, TfgenConfig,
@@ -384,7 +383,7 @@ fn compile_document(
 /// A generator's `schema` list, its refs filled for the stack, each entry with
 /// where it was written.
 fn schema_entries(
-    node: &yaml_dsl_compiler::Node,
+    node: &yaml_dsl_spec::Node,
     frame: &RefFrame<'_>,
 ) -> Result<Vec<SchemaSource>, Diagnostic> {
     let not_a_list = || {

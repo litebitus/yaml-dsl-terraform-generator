@@ -6,9 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fancy_regex::Regex;
-use yaml_dsl_compiler::json_path::PathPattern;
-use yaml_dsl_compiler::yaml_reader::parse;
-use yaml_dsl_compiler::{Compiler, Diagnostic, DslDefinition, Entry, Node, NodeKind, Position};
+use yaml_dsl_compiler::{Compiler, FileSource};
+use yaml_dsl_spec::json_path::PathPattern;
+use yaml_dsl_spec::yaml_reader::parse;
+use yaml_dsl_spec::{
+    Diagnostic, DslDefinition, Entry, Node, NodeKind, Position, read_dsl_definitions,
+};
 
 use crate::disk_source::DiskSource;
 use crate::error_report::did_you_mean;
@@ -110,12 +113,19 @@ pub struct TemplateText {
 }
 
 impl LoadedConfig {
-    pub fn load(directory: &Path, source: &Arc<DiskSource>) -> Result<Self, Diagnostic> {
+    /// The config of `directory`, or every problem its files hold.
+    pub fn load(directory: &Path, source: &Arc<DiskSource>) -> Result<Self, Vec<Diagnostic>> {
         let dsl_file = directory.join(DSL_CONFIG_FILE);
-        let dsl_root = read_yaml(&dsl_file)?;
+        let dsl_text = fs::read_to_string(&dsl_file).map_err(|error| {
+            vec![Diagnostic::unplaced(format!(
+                "reading {}: {error}",
+                dsl_file.display()
+            ))]
+        })?;
+        let declared = read_dsl_definitions(&dsl_file, &dsl_text)?;
         let tfgen_file = directory.join(TFGEN_CONFIG_FILE);
         let tfgen = if tfgen_file.exists() {
-            Some(TfgenConfig::read(&tfgen_file, directory)?)
+            Some(TfgenConfig::read(&tfgen_file, directory).map_err(|problem| vec![problem])?)
         } else {
             None
         };
@@ -124,36 +134,24 @@ impl LoadedConfig {
             .flat_map(|tfgen| &tfgen.generators)
             .map(|generator| generator.dsl_id.as_str())
             .collect();
-        let blocks = dsl_root
-            .get("dsls")
-            .and_then(Node::items)
-            .ok_or_else(|| Diagnostic::at(&dsl_root.position, "`dsls` lists the config's DSLs"))?;
-        let mut dsls = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            let json = block.to_json();
-            let id = json["id"]
-                .as_str()
-                .ok_or_else(|| Diagnostic::at(&block.position, "a DSL block has an `id`"))?
-                .to_owned();
-            let selection_block = serde_json::json!({
+        let mut dsls = Vec::with_capacity(declared.len());
+        for read in declared {
+            let block = &read.block;
+            let id = read.definition.id.clone();
+            let selection_definition = DslDefinition::from_json(&serde_json::json!({
                 "id": id,
-                "file_includes": json["file_includes"],
-                "file_excludes": json
-                    .get("file_excludes")
-                    .cloned()
-                    .unwrap_or(serde_json::json!([])),
-            });
-            let compiler = |json: &serde_json::Value| {
-                let definition = DslDefinition::from_json(json).map_err(|message| {
-                    Diagnostic::at(&block.position, format!("DSL `{id}`: {message}"))
-                })?;
-                let source: Arc<dyn yaml_dsl_compiler::FileSource> = source.clone();
+                "file_includes": read.definition.file_includes,
+                "file_excludes": read.definition.file_excludes,
+            }))
+            .map_err(|message| vec![Diagnostic::at(&block.position, message)])?;
+            let compiler = |definition: DslDefinition| {
+                let source: Arc<dyn FileSource> = source.clone();
                 Compiler::new(definition, directory, source)
-                    .map_err(|error| located(error, &block.position, &id))
+                    .map_err(|error| vec![located(error, &block.position, &id)])
             };
-            let selection = compiler(&selection_block)?;
+            let selection = compiler(selection_definition)?;
             let generated = if generated_ids.contains(&id.as_str()) {
-                Some(compiler(&json)?)
+                Some(compiler(read.definition.clone())?)
             } else {
                 None
             };
@@ -180,15 +178,17 @@ impl LoadedConfig {
             for generator in &tfgen.generators {
                 if !dsls.iter().any(|dsl| dsl.id == generator.dsl_id) {
                     let ids: Vec<String> = dsls.iter().map(|dsl| dsl.id.clone()).collect();
-                    return Err(Diagnostic::at(
-                        &generator.position,
-                        format!("generator `{}` names no DSL", generator.dsl_id),
-                    )
-                    .with_label(format!(
-                        "{DSL_CONFIG_FILE} declares no DSL `{}`",
-                        generator.dsl_id
-                    ))
-                    .with_help(did_you_mean(&generator.dsl_id, &ids)));
+                    return Err(vec![
+                        Diagnostic::at(
+                            &generator.position,
+                            format!("generator `{}` names no DSL", generator.dsl_id),
+                        )
+                        .with_label(format!(
+                            "{DSL_CONFIG_FILE} declares no DSL `{}`",
+                            generator.dsl_id
+                        ))
+                        .with_help(did_you_mean(&generator.dsl_id, &ids)),
+                    ]);
                 }
             }
         }
@@ -220,10 +220,6 @@ fn located(error: Diagnostic, position: &Position, id: &str) -> Diagnostic {
         Some(_) => error,
         None => Diagnostic::at(position, format!("DSL `{id}`: {}", error.message)),
     }
-}
-
-pub fn read_yaml(file: &Path) -> Result<Node, Diagnostic> {
-    Ok(read_yaml_text(file)?.0)
 }
 
 /// A YAML file's tree, and its text.

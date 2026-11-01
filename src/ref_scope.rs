@@ -4,8 +4,8 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use yaml_dsl_compiler::resolved::{MapEntry, Value, ValueKind};
-use yaml_dsl_compiler::{Diagnostic, Node, Position};
+use yaml_dsl_spec::resolved::{MapEntry, Value, ValueKind};
+use yaml_dsl_spec::{Diagnostic, Node, Position};
 
 use crate::config_files::ValueRule;
 use crate::error_report::did_you_mean;

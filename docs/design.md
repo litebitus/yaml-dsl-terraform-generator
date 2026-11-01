@@ -1,6 +1,6 @@
 # tfgen
 
-`tfgen` builds a YAML DSL over Terraform. A DSL's syntax is a block of `yaml-dsl.yml`, the config the [YAML DSL editor](https://github.com/litebitus/vscode-yaml-dsl-editor) reads; what it compiles to is `tfgen.yml` and the templates it names. `tfgen` reads a stack's documents, folds, expands and resolves them with the `yaml-dsl-compiler` crate, and writes the stack's Terraform.
+`tfgen` builds a YAML DSL over Terraform. A DSL's syntax is a block of `yaml-dsl.yml`, the config the [YAML DSL editor](https://github.com/litebitus/vscode-yaml-dsl-editor) reads; what it compiles to is `tfgen.yml` and the templates it names. `tfgen` reads `yaml-dsl.yml` with [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec), which returns each DSL's definition validated or every problem at its field, reads a stack's documents, folds, expands and resolves them with the `yaml-dsl-compiler` crate, and writes the stack's Terraform.
 
 Nothing about a particular DSL is built into `tfgen`. Which keys declare what, what a reference becomes, which block a declaration compiles to: every rule is configuration.
 

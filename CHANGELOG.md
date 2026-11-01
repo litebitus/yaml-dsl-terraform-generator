@@ -5,6 +5,7 @@
 - Generation
   - `tfgen.yml` states its format, `version: "1"`; its JSON Schema is attached to each release.
   - Examples of both module layouts: one module at one pin, and a module per component.
+  - Reads `yaml-dsl.yml` through yaml-dsl-spec: a definition is validated, every problem reported at its field.
   - Compiles each stack's documents by its DSL's generator, through templates, in the document's order.
   - Writes the templates a stack names, and the providers they require.
   - Deletes the files a stack no longer produces.

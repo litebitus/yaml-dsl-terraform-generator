@@ -7,8 +7,8 @@ use hcl_edit::Span;
 use hcl_edit::expr::{Expression, ObjectKey};
 use hcl_edit::structure::{BlockLabel, Structure};
 use hcl_edit::template::Element;
-use yaml_dsl_compiler::resolved::{MapEntry, Value, ValueKind};
-use yaml_dsl_compiler::{Diagnostic, Position};
+use yaml_dsl_spec::resolved::{MapEntry, Value, ValueKind};
+use yaml_dsl_spec::{Diagnostic, Position};
 
 const GLOBALS_BLOCK: &str = "globals";
 

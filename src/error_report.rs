@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use yaml_dsl_compiler::{Diagnostic, DiagnosticNotes, Position};
+use yaml_dsl_spec::{Diagnostic, DiagnosticNotes, Position};
 
 use crate::generated_files::FileChange;
 use crate::line_wrapping::WrappedLine;
@@ -321,7 +321,7 @@ fn token_length(rest: &str) -> usize {
 /// The help naming the candidate spelt closest to a name, where one is close
 /// enough to be a likely fix.
 pub fn did_you_mean(name: &str, candidates: &[String]) -> Option<String> {
-    yaml_dsl_compiler::closest_name(name, candidates)
+    yaml_dsl_spec::closest_name(name, candidates)
         .map(|candidate| format!("did you mean `{candidate}`?"))
 }
 

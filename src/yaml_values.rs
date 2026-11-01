@@ -3,9 +3,9 @@
 
 use std::sync::OnceLock;
 
-use yaml_dsl_compiler::definition::MarkerFunction;
-use yaml_dsl_compiler::resolved::{MapEntry, Value, ValueKind};
-use yaml_dsl_compiler::{CallKey, Diagnostic, Node, NodeKind, Position, parse_call_key};
+use yaml_dsl_spec::definition::MarkerFunction;
+use yaml_dsl_spec::resolved::{MapEntry, Value, ValueKind};
+use yaml_dsl_spec::{CallKey, Diagnostic, Node, NodeKind, Position, parse_call_key};
 
 use crate::config_files::ValueRule;
 use crate::format_function::format_layout;

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use globset::Glob;
-use yaml_dsl_compiler::{Diagnostic, DocumentSchema, Position, SchemaProvider, Unit};
+use yaml_dsl_compiler::{DocumentSchema, SchemaProvider, Unit};
+use yaml_dsl_spec::{Diagnostic, Position};
 
 use crate::schema_url_copies::{ReadFailure, SchemaUrlCopies, is_schema_url};
 

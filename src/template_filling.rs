@@ -2,8 +2,8 @@
 //! crate's output tree.
 
 use yaml_dsl_compiler::output::{BodyItem, Expression};
-use yaml_dsl_compiler::resolved::Value;
-use yaml_dsl_compiler::{Diagnostic, Position};
+use yaml_dsl_spec::resolved::Value;
+use yaml_dsl_spec::{Diagnostic, Position};
 
 use crate::config_files::TemplateText;
 use crate::hcl_conversion::{Sentinels, body_items, expression};

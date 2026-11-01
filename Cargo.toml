@@ -25,10 +25,11 @@ terminal_size = "0.4.4"
 unicode-linebreak = "0.1.5"
 unicode-width = "0.2.3"
 ureq = "3.5.0"
+yaml-dsl-spec = "0.0.1"
 
 [dependencies.yaml-dsl-compiler]
 git = "https://github.com/litebitus/yaml-dsl-compiler"
-rev = "95d7060947afe2ae71e62a9b035f15b1d2432598"
+rev = "5c8a8a61fdc8ec143810db039d747d374ff35cbd"
 
 [dev-dependencies]
 jsonschema = { version = "0.60.2", default-features = false }
