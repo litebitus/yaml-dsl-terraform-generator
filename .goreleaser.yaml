@@ -34,9 +34,6 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-changelog:
-  disable: true
-
 homebrew_casks:
   - name: tfgen
     repository:
