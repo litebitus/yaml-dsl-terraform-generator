@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.2 — 2026-11-01
+
 - Release
   - darwin binaries are built on macOS, linked against the macOS SDK.
 
