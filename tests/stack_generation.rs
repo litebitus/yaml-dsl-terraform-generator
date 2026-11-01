@@ -355,6 +355,10 @@ fn every_stack_of_the_repo_is_generated_in_both_module_layouts() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let listed = String::from_utf8_lossy(&output.stdout);
+    assert!(listed.contains("stacks/dev\n  [+] main.tf\n"), "{listed}");
+    assert!(listed.contains("  [-] old.tf\n"), "{listed}");
+    assert!(listed.ends_with("2 of 2 stacks changed\n"), "{listed}");
     assert_eq!(workspace.read("stacks/dev/main.tf"), ONE_MODULE_MAIN);
     assert_eq!(
         workspace.read("stacks/dev/providers.tf"),
@@ -369,10 +373,9 @@ fn every_stack_of_the_repo_is_generated_in_both_module_layouts() {
     assert!(!workspace.exists("terramate-stack/main.tf"));
     let second = workspace.run(&[]);
     assert!(second.status.success());
-    assert!(
-        second.stdout.is_empty(),
-        "{}",
-        String::from_utf8_lossy(&second.stdout)
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        "0 of 2 stacks changed\n"
     );
 }
 

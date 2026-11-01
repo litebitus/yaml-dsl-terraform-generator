@@ -545,6 +545,7 @@ TFGEN_SCHEMA=mock-dsl=../mock-modules/mock.schema.json tfgen  # the same, pairs 
 ```
 
 - `tfgen` writes a file only where its contents change.
+- A run lists each stack it changed, in path order, with the files it changed under it, marked as `terramate generate` marks them: `[+]` created, `[~]` changed, `[-]` deleted. It ends with how many of the stacks it compared changed, `1 of 141 stacks changed`; a stack with errors is not compared.
 - A stack with an error gets no files, and the run exits non-zero. A stack's errors are reported in file order, then a line counting them.
 - An error is reported as a compiler reports one:
 

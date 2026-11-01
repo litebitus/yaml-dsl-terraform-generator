@@ -8,6 +8,7 @@ use std::path::Path;
 
 use yaml_dsl_compiler::{Diagnostic, DiagnosticNotes, Position};
 
+use crate::generated_files::FileChange;
 use crate::line_wrapping::WrappedLine;
 
 const CONTEXT_LINES: usize = 2;
@@ -46,14 +47,26 @@ impl ReportStyle {
         }
     }
 
-    /// `wrote <path>`, the verb in green.
-    pub fn wrote(self, path: &str) -> String {
-        format!("{} {path}", self.paint(CONVERGED, "wrote"))
+    /// A stack's path in bold, then each file it changed under it, marked as
+    /// `terramate generate` marks one: `[+]` created and `[~]` changed in green,
+    /// `[-]` deleted in yellow.
+    pub fn stack_changes(self, stack: &str, files: &[(String, FileChange)]) -> String {
+        let mut text = self.paint(SUBJECT, stack);
+        for (file, change) in files {
+            let mark = match change {
+                FileChange::Created => self.paint(CONVERGED, "[+]"),
+                FileChange::Changed => self.paint(CONVERGED, "[~]"),
+                FileChange::Deleted => self.paint(ATTENTION, "[-]"),
+            };
+            text.push_str(&format!("\n  {mark} {file}"));
+        }
+        text
     }
 
-    /// `deleted <path>`, the verb in yellow.
-    pub fn deleted(self, path: &str) -> String {
-        format!("{} {path}", self.paint(ATTENTION, "deleted"))
+    /// The line closing a run: how many of the stacks it compared changed.
+    pub fn changed_stacks(self, changed: usize, compared: usize) -> String {
+        let noun = if compared == 1 { "stack" } else { "stacks" };
+        format!("{changed} of {compared} {noun} changed")
     }
 
     /// A warning with no source to show.

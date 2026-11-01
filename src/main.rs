@@ -33,7 +33,7 @@ use yaml_dsl_compiler::Diagnostic;
 use crate::config_files::{DSL_CONFIG_FILE, LoadedConfig};
 use crate::disk_source::DiskSource;
 use crate::error_report::{ReportStyle, Severity, SourceFiles, report};
-use crate::generated_files::write_stack_files;
+use crate::generated_files::{FileChange, write_stack_files};
 use crate::schema_overrides::{
     SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, schema_pair, variable_pairs,
 };
@@ -352,6 +352,8 @@ fn run(
         });
     }
     let results: Vec<_> = jobs.par_iter().map(generate_stack).collect();
+    let mut changed_stacks: Vec<(String, Vec<(String, FileChange)>)> = Vec::new();
+    let mut compared = 0;
     for (job, result) in jobs.iter().zip(results) {
         match result {
             Ok(stack) => {
@@ -360,11 +362,14 @@ fn run(
                 }
                 match write_stack_files(&stack.directory, &stack.files) {
                     Ok(changes) => {
-                        for path in &changes.written {
-                            println!("{}", styles.output.wrote(&shown(path, &root)));
-                        }
-                        for path in &changes.deleted {
-                            println!("{}", styles.output.deleted(&shown(path, &root)));
+                        compared += 1;
+                        if !changes.files.is_empty() {
+                            let files = changes
+                                .files
+                                .iter()
+                                .map(|(path, change)| (shown(path, &stack.directory), *change))
+                                .collect();
+                            changed_stacks.push((shown(&job.directory, &root), files));
                         }
                     }
                     Err(message) => {
@@ -388,6 +393,14 @@ fn run(
             }
         }
     }
+    changed_stacks.sort_by(|first, second| first.0.cmp(&second.0));
+    for (stack, files) in &changed_stacks {
+        println!("{}", styles.output.stack_changes(stack, files));
+    }
+    println!(
+        "{}",
+        styles.output.changed_stacks(changed_stacks.len(), compared)
+    );
     Ok(succeeded)
 }
 

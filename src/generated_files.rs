@@ -45,11 +45,18 @@ fn factored_paths(paths: &[String]) -> String {
     }
 }
 
-/// What one stack's write changed on disk.
+/// How a write changed a file on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileChange {
+    Created,
+    Changed,
+    Deleted,
+}
+
+/// What one stack's write changed on disk: each file it touched, by path.
 #[derive(Default)]
 pub struct DiskChanges {
-    pub written: Vec<PathBuf>,
-    pub deleted: Vec<PathBuf>,
+    pub files: Vec<(PathBuf, FileChange)>,
 }
 
 /// Writes `files` where they change, then deletes every file of `directory` that
@@ -64,7 +71,11 @@ pub fn write_stack_files(
         if current.as_deref() != Some(contents.as_str()) {
             fs::write(path, contents)
                 .map_err(|error| format!("writing {}: {error}", path.display()))?;
-            changes.written.push(path.clone());
+            let change = match current {
+                Some(_) => FileChange::Changed,
+                None => FileChange::Created,
+            };
+            changes.files.push((path.clone(), change));
         }
     }
     let listed = fs::read_dir(directory)
@@ -82,8 +93,11 @@ pub fn write_stack_files(
     stale.sort();
     for path in stale {
         fs::remove_file(&path).map_err(|error| format!("deleting {}: {error}", path.display()))?;
-        changes.deleted.push(path);
+        changes.files.push((path, FileChange::Deleted));
     }
+    changes
+        .files
+        .sort_by(|first, second| first.0.cmp(&second.0));
     Ok(changes)
 }
 
@@ -153,10 +167,25 @@ mod tests {
         fs::write(&kept, format!("{header}a = 1\n")).unwrap();
         fs::write(&stale, format!("{header}b = 1\n")).unwrap();
         fs::write(&hand_written, "c = 1\n").unwrap();
-        let files = vec![(kept.clone(), format!("{header}a = 1\n"))];
+        let created = scratch.0.join("providers.tf");
+        let files = vec![
+            (kept.clone(), format!("{header}a = 1\n")),
+            (created.clone(), format!("{header}c = 1\n")),
+        ];
         let changes = write_stack_files(&scratch.0, &files).unwrap();
-        assert!(changes.written.is_empty());
-        assert_eq!(changes.deleted, std::slice::from_ref(&stale));
+        assert_eq!(
+            changes.files,
+            [
+                (stale.clone(), FileChange::Deleted),
+                (created.clone(), FileChange::Created)
+            ]
+        );
         assert!(hand_written.exists() && !stale.exists());
+        let files = vec![
+            (kept.clone(), format!("{header}a = 2\n")),
+            (created, format!("{header}c = 1\n")),
+        ];
+        let changes = write_stack_files(&scratch.0, &files).unwrap();
+        assert_eq!(changes.files, [(kept, FileChange::Changed)]);
     }
 }
