@@ -25,8 +25,8 @@ terminal_size = "0.4.4"
 unicode-linebreak = "0.1.5"
 unicode-width = "0.2.3"
 ureq = "3.5.0"
-yaml-dsl-compiler = "0.1.0"
-yaml-dsl-spec = "0.0.1"
+yaml-dsl-compiler = "0.1.1"
+yaml-dsl-spec = "0.1.2"
 
 [dev-dependencies]
 jsonschema = { version = "0.60.2", default-features = false }
