@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Schemas
+  - A schema URL is read without credentials first, and with the machine's credentials only where it carries `yaml_dsl_machine_credentials=true` and that read is refused; a link to a GitHub release's `latest` or through `www.github.com` is read the same way, and a link no credential reads is reported as a missing release or asset, an unseen repository or a refused credential.
+
 ## v0.0.3 — 2026-11-01
 
 - Generation

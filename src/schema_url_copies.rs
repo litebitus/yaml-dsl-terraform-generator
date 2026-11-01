@@ -18,6 +18,7 @@ use crate::schema_credentials::{Credential, CredentialSource, MachineCredentials
 
 const EDITOR_PARAMETER_PREFIX: &str = "yaml_dsl_";
 const MAX_AGE_PARAMETER: &str = "yaml_dsl_max_age_days";
+const MACHINE_CREDENTIALS_PARAMETER: &str = "yaml_dsl_machine_credentials";
 const DAY_SECONDS: u64 = 24 * 60 * 60;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const STATUS_OK: u16 = 200;
@@ -26,7 +27,8 @@ const STATUS_UNAUTHORIZED: u16 = 401;
 const STATUS_FORBIDDEN: u16 = 403;
 const STATUS_NOT_FOUND: u16 = 404;
 const GITHUB_API: &str = "https://api.github.com";
-const GITHUB_RELEASE_PREFIX: &str = "https://github.com/";
+/// Where a GitHub link starts, before `<owner>/<repo>/releases/`.
+const GITHUB_LINK_PREFIXES: [&str; 2] = ["https://github.com/", "https://www.github.com/"];
 const S3_PREFIX: &str = "s3://";
 const AWS_COMMAND: &str = "aws";
 const AWS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -61,6 +63,8 @@ pub struct SchemaUrlCopies {
     agent: ureq::Agent,
     credentials: Box<dyn CredentialSource>,
     github_api: String,
+    /// Where a GitHub link starts, before `<owner>/<repo>/releases/`.
+    github_link_prefixes: Vec<String>,
     /// The AWS command line `s3://` objects are read through.
     aws_command: PathBuf,
     /// The credentials of each role assumed this run, by role.
@@ -122,11 +126,13 @@ pub struct SchemaText {
     pub warnings: Vec<String>,
 }
 
-/// A URL as fetched, without the editor's parameters, and the max age it gives.
+/// A URL as fetched, without the editor's parameters, the max age it gives, and
+/// whether it opts in to the machine's credentials.
 #[derive(Debug, PartialEq, Eq)]
 struct EditorParameters {
     fetch_url: String,
     max_age_days: u64,
+    machine_credentials: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -139,13 +145,44 @@ struct KeptCopy {
     body: String,
 }
 
-/// A GitHub release asset, by the link GitHub shows for it.
+/// A GitHub link under `<owner>/<repo>/releases/`: its repository, and the
+/// release and asset its path reads, where it reads one.
 #[derive(Debug, PartialEq, Eq)]
-struct ReleaseAsset {
+struct GithubRelease {
     owner: String,
     repository: String,
-    tag: String,
+    asset: Option<ReleaseAsset>,
+}
+
+/// A release asset a GitHub link's path reads.
+#[derive(Debug, PartialEq, Eq)]
+struct ReleaseAsset {
+    release: ReleaseName,
     asset: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseName {
+    Latest,
+    Tag(String),
+}
+
+impl ReleaseName {
+    /// The path of the release under the repository's `releases` in GitHub's API.
+    fn api_path(&self) -> String {
+        match self {
+            Self::Latest => "latest".to_owned(),
+            Self::Tag(tag) => format!("tags/{}", tag.replace('/', "%2F")),
+        }
+    }
+
+    /// The release as a report names it.
+    fn shown(&self) -> String {
+        match self {
+            Self::Latest => "the latest release".to_owned(),
+            Self::Tag(tag) => format!("release `{tag}`"),
+        }
+    }
 }
 
 /// A credential a source refused: what it answered, and what renews it.
@@ -230,6 +267,7 @@ impl SchemaUrlCopies {
             agent,
             credentials,
             github_api: github_api.to_owned(),
+            github_link_prefixes: GITHUB_LINK_PREFIXES.map(str::to_owned).to_vec(),
             aws_command: PathBuf::from(AWS_COMMAND),
             assumed_roles: Mutex::new(BTreeMap::new()),
         }
@@ -255,23 +293,17 @@ impl SchemaUrlCopies {
                 warnings: Vec::new(),
             });
         }
-        let asset = release_asset(&parameters.fetch_url);
-        let github_tokens = match asset {
-            Some(_) => self.credentials.github_tokens(),
-            None => Vec::new(),
-        };
-        let (answer, mut warnings) = match &asset {
-            _ if parameters.fetch_url.starts_with(S3_PREFIX) => (
+        let (answer, mut warnings) = if parameters.fetch_url.starts_with(S3_PREFIX) {
+            (
                 self.s3_answer(&parameters.fetch_url, &copy_path, kept.as_ref()),
                 Vec::new(),
-            ),
-            Some(asset) if !github_tokens.is_empty() => {
-                self.release_answer(asset, &github_tokens, kept.as_ref())
-            }
-            _ => (
-                self.link_answer(&parameters.fetch_url, kept.as_ref()),
-                Vec::new(),
-            ),
+            )
+        } else {
+            self.link_answer(
+                &parameters.fetch_url,
+                parameters.machine_credentials,
+                kept.as_ref(),
+            )
         };
         let copy = match (answer, kept) {
             (
@@ -337,37 +369,77 @@ impl SchemaUrlCopies {
         })
     }
 
-    /// A link fetched as written, with the `.netrc` login of its host where it has one.
-    fn link_answer(&self, url: &str, kept: Option<&KeptCopy>) -> Answer {
-        let login = url_host(url).and_then(|host| self.credentials.host_login(host));
-        let mut request = conditional(self.agent.get(url), kept);
-        if let Some(login) = &login {
-            request = request.header("Authorization", login.authorization());
+    /// A link read as written, without credentials; and, where it opts in to the
+    /// machine's credentials and that read is refused, read again with them.
+    fn link_answer(
+        &self,
+        url: &str,
+        machine_credentials: bool,
+        kept: Option<&KeptCopy>,
+    ) -> (Answer, Vec<String>) {
+        let response = match conditional(self.agent.get(url), kept).call() {
+            Ok(response) => response,
+            Err(error) => return (Answer::Failed(error.to_string()), Vec::new()),
+        };
+        let status = response.status().as_u16();
+        let release = self.github_release(url);
+        let refused = matches!(status, STATUS_UNAUTHORIZED | STATUS_FORBIDDEN)
+            || (release.is_some() && status == STATUS_NOT_FOUND);
+        if !machine_credentials || !refused {
+            return (sent_answer(response), Vec::new());
         }
-        match request.call() {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                match (status, &login) {
-                    (STATUS_UNAUTHORIZED | STATUS_FORBIDDEN, Some(login)) => Answer::Refused {
-                        refuser: url_host(url).unwrap_or("the server").to_owned(),
-                        refusals: vec![refusal(login, status)],
-                    },
-                    (STATUS_NOT_FOUND, None) if release_asset(url).is_some() => Answer::Failed(
-                        "answered 404: a private release needs a GitHub token, from \
-                         `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`"
-                            .to_owned(),
-                    ),
-                    _ => sent_answer(response),
-                }
+        let credentialed = match &release {
+            Some(GithubRelease {
+                owner,
+                repository,
+                asset: Some(asset),
+            }) => {
+                let tokens = self.credentials.github_tokens();
+                (!tokens.is_empty())
+                    .then(|| self.release_answer(owner, repository, asset, &tokens, kept))
             }
+            Some(_) => None,
+            None => self
+                .login_answer(url, kept)
+                .map(|answer| (answer, Vec::new())),
+        };
+        credentialed.unwrap_or_else(|| (sent_answer(response), Vec::new()))
+    }
+
+    /// A link read with the `.netrc` login of its host; none where it has none.
+    fn login_answer(&self, url: &str, kept: Option<&KeptCopy>) -> Option<Answer> {
+        let host = url_host(url)?;
+        let login = self.credentials.host_login(host)?;
+        let request =
+            conditional(self.agent.get(url), kept).header("Authorization", login.authorization());
+        Some(match request.call() {
+            Ok(response) => match response.status().as_u16() {
+                status @ (STATUS_UNAUTHORIZED | STATUS_FORBIDDEN) => Answer::Refused {
+                    refuser: host.to_owned(),
+                    refusals: vec![refusal(&login, status)],
+                },
+                _ => sent_answer(response),
+            },
             Err(error) => Answer::Failed(error.to_string()),
-        }
+        })
+    }
+
+    /// The GitHub link `url` is, where it is one under `<owner>/<repo>/releases/`.
+    fn github_release(&self, url: &str) -> Option<GithubRelease> {
+        self.github_link_prefixes
+            .iter()
+            .find_map(|prefix| url.strip_prefix(prefix.as_str()))
+            .and_then(github_release)
     }
 
     /// A release asset read through GitHub's API, each token tried in turn until
-    /// one is let in; the warnings name every token refused before it.
+    /// one is let in; the warnings name every token refused before it. When none
+    /// reads it, the answer says what is known: a release or asset the repository
+    /// lacks, a repository no token can see, or every token refused.
     fn release_answer(
         &self,
+        owner: &str,
+        repository: &str,
         asset: &ReleaseAsset,
         tokens: &[Credential],
         kept: Option<&KeptCopy>,
@@ -378,15 +450,12 @@ impl SchemaUrlCopies {
                 .map(|refusal| format!("GitHub refused {}: {}", refusal.reason, refusal.fix))
                 .collect()
         };
+        let repository_name = format!("`{owner}/{repository}`");
+        let repository_url = format!("{}/repos/{owner}/{repository}", self.github_api);
         let mut refusals = Vec::new();
+        let mut missing = None;
         for token in tokens {
-            let release_url = format!(
-                "{}/repos/{}/{}/releases/tags/{}",
-                self.github_api,
-                asset.owner,
-                asset.repository,
-                asset.tag.replace('/', "%2F")
-            );
+            let release_url = format!("{repository_url}/releases/{}", asset.release.api_path());
             let release = self
                 .agent
                 .get(&release_url)
@@ -398,8 +467,25 @@ impl SchemaUrlCopies {
                 Err(error) => return (Answer::Failed(error.to_string()), warnings_of(&refusals)),
             };
             let status = release.status().as_u16();
-            if status != STATUS_OK {
+            if matches!(status, STATUS_UNAUTHORIZED | STATUS_FORBIDDEN) {
                 refusals.push(refusal(token, status));
+                continue;
+            }
+            if status != STATUS_OK {
+                let seen = self
+                    .agent
+                    .get(&repository_url)
+                    .header("Authorization", token.authorization())
+                    .header("Accept", "application/vnd.github+json")
+                    .call()
+                    .is_ok_and(|repository| repository.status().as_u16() == STATUS_OK);
+                if seen {
+                    missing = Some(format!(
+                        "{repository_name} has no {}",
+                        asset.release.shown()
+                    ));
+                    break;
+                }
                 continue;
             }
             let listing: serde_json::Value = match release
@@ -418,8 +504,12 @@ impl SchemaUrlCopies {
                 .find(|listed| listed["name"] == asset.asset.as_str())
                 .and_then(|listed| listed["url"].as_str())
             else {
-                let reason = format!("release `{}` has no asset `{}`", asset.tag, asset.asset);
-                return (Answer::Failed(reason), warnings_of(&refusals));
+                missing = Some(format!(
+                    "{} of {repository_name} has no asset `{}`",
+                    asset.release.shown(),
+                    asset.asset
+                ));
+                break;
             };
             let download = conditional(self.agent.get(asset_url), kept)
                 .header("Authorization", token.authorization())
@@ -438,11 +528,18 @@ impl SchemaUrlCopies {
                 Err(error) => return (Answer::Failed(error.to_string()), warnings_of(&refusals)),
             }
         }
-        let refused = Answer::Refused {
-            refuser: "GitHub".to_owned(),
-            refusals,
-        };
-        (refused, Vec::new())
+        if let Some(missing) = missing {
+            return (Answer::Failed(missing), warnings_of(&refusals));
+        }
+        if refusals.len() == tokens.len() {
+            let refused = Answer::Refused {
+                refuser: "GitHub".to_owned(),
+                refusals,
+            };
+            return (refused, Vec::new());
+        }
+        let unseen = format!("no credential can see {repository_name}");
+        (Answer::Failed(unseen), warnings_of(&refusals))
     }
 
     /// An `s3://<bucket>/<key>` object read through the AWS command line, with the
@@ -760,7 +857,6 @@ fn sent_answer(mut response: ureq::http::Response<ureq::Body>) -> Answer {
 fn refusal(credential: &Credential, status: u16) -> Refusal {
     let answered = match status {
         STATUS_UNAUTHORIZED => "401 Bad credentials".to_owned(),
-        STATUS_NOT_FOUND => "404, a token that cannot see the release".to_owned(),
         status => status.to_string(),
     };
     Refusal {
@@ -769,25 +865,34 @@ fn refusal(credential: &Credential, status: u16) -> Refusal {
     }
 }
 
-/// The release asset a GitHub link names:
-/// `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`.
-fn release_asset(url: &str) -> Option<ReleaseAsset> {
-    let path = url.strip_prefix(GITHUB_RELEASE_PREFIX)?;
-    if path.contains('?') {
+/// The repository a GitHub link's `path`, after its host, names under
+/// `<owner>/<repo>/releases/`, and the release asset that path reads:
+/// `download/<tag>/<asset>` or `latest/download/<asset>`.
+fn github_release(path: &str) -> Option<GithubRelease> {
+    let path = path.split(['?', '#']).next()?;
+    let steps: Vec<&str> = path.split('/').collect();
+    let [owner, repository, "releases", release_steps @ ..] = steps.as_slice() else {
+        return None;
+    };
+    if owner.is_empty() || repository.is_empty() {
         return None;
     }
-    let steps: Vec<&str> = path.split('/').collect();
-    match steps.as_slice() {
-        [owner, repository, "releases", "download", tag @ .., asset] if !tag.is_empty() => {
-            Some(ReleaseAsset {
-                owner: (*owner).to_owned(),
-                repository: (*repository).to_owned(),
-                tag: tag.join("/"),
-                asset: (*asset).to_owned(),
-            })
-        }
+    let asset = match release_steps {
+        ["latest", "download", asset] => Some(ReleaseAsset {
+            release: ReleaseName::Latest,
+            asset: (*asset).to_owned(),
+        }),
+        ["download", tag @ .., asset] if !tag.is_empty() => Some(ReleaseAsset {
+            release: ReleaseName::Tag(tag.join("/")),
+            asset: (*asset).to_owned(),
+        }),
         _ => None,
-    }
+    };
+    Some(GithubRelease {
+        owner: (*owner).to_owned(),
+        repository: (*repository).to_owned(),
+        asset,
+    })
 }
 
 fn url_host(url: &str) -> Option<&str> {
@@ -803,14 +908,20 @@ fn editor_parameters(url: &str) -> Result<EditorParameters, String> {
         return Ok(EditorParameters {
             fetch_url: url.to_owned(),
             max_age_days: 0,
+            machine_credentials: false,
         });
     };
     let mut passed = Vec::new();
     let mut max_age_days = 0;
+    let mut machine_credentials = false;
     for parameter in query.split('&') {
         let (name, value) = parameter.split_once('=').unwrap_or((parameter, ""));
         if !name.starts_with(EDITOR_PARAMETER_PREFIX) {
             passed.push(parameter);
+        } else if name == MACHINE_CREDENTIALS_PARAMETER {
+            machine_credentials = value.parse().map_err(|_| {
+                format!("`{MACHINE_CREDENTIALS_PARAMETER}` must be `true` or `false`")
+            })?;
         } else if name != MAX_AGE_PARAMETER {
             return Err(format!("`{name}` is not a parameter the editor reads"));
         } else {
@@ -827,6 +938,7 @@ fn editor_parameters(url: &str) -> Result<EditorParameters, String> {
     Ok(EditorParameters {
         fetch_url,
         max_age_days,
+        machine_credentials,
     })
 }
 
@@ -964,6 +1076,7 @@ mod tests {
     #[derive(Default)]
     struct GivenCredentials {
         github: Vec<Credential>,
+        login: Option<Credential>,
     }
 
     impl CredentialSource for GivenCredentials {
@@ -972,7 +1085,7 @@ mod tests {
         }
 
         fn host_login(&self, _host: &str) -> Option<Credential> {
-            None
+            self.login.clone()
         }
     }
 
@@ -985,12 +1098,17 @@ mod tests {
     }
 
     const GOOD_TOKEN: &str = "Bearer mock-good-token";
-    const RELEASE_LINK: &str =
-        "https://github.com/mock-org/mock-repo/releases/download/mock/v1.0/mock.schema.json";
+    const BLIND_TOKEN: &str = "Bearer mock-blind-token";
+    const NETRC_LOGIN: &str = "Basic bW9jay11c2VyOm1vY2stc2VjcmV0";
+    const OPT_IN: &str = "?yaml_dsl_machine_credentials=true";
+    const PRIVATE_RELEASE: &str = "mock-org/mock-repo/releases/download/mock/v1.0/mock.schema.json";
+    const PUBLIC_RELEASE: &str = "mock-org/public-repo/releases/download/v1/mock.schema.json";
 
-    /// GitHub's API for one private release: its listing and its asset let in
-    /// only the good token, and the asset redirects to a file store that refuses
-    /// any request still carrying a token. Dropping it stops and joins its thread.
+    /// GitHub for one public and one private repository: its pages answer the
+    /// public release and 404 for the private one, and its API lets the good token
+    /// see the private release, by tag and as the latest, whose asset redirects to
+    /// a file store that refuses any request still carrying a token. The blind
+    /// token sees nothing. Dropping it stops and joins its thread.
     struct MockGithub {
         api: String,
         server: Arc<tiny_http::Server>,
@@ -1009,31 +1127,42 @@ mod tests {
                         .iter()
                         .find(|header| header.field.equiv("Authorization"))
                         .map(|header| header.value.as_str().to_owned());
-                    let let_in = authorization.as_deref() == Some(GOOD_TOKEN);
-                    let response = match request.url() {
-                        "/repos/mock-org/mock-repo/releases/tags/mock%2Fv1.0" if let_in => {
-                            tiny_http::Response::from_string(format!(
-                                concat!(
-                                    r#"{{"assets": [{{"name": "mock.schema.json", "#,
-                                    r#""url": "{}/assets/7"}}]}}"#
-                                ),
-                                base
-                            ))
+                    let answer = |status: u16, body: String| {
+                        tiny_http::Response::from_string(body).with_status_code(status)
+                    };
+                    let assets = format!(
+                        concat!(
+                            r#"{{"assets": [{{"name": "mock.schema.json", "#,
+                            r#""url": "{}/assets/7"}}]}}"#
+                        ),
+                        base
+                    );
+                    let path = request.url().to_owned();
+                    let response = match path.as_str() {
+                        "/netrc.json" if authorization.as_deref() == Some(NETRC_LOGIN) => {
+                            answer(200, SCHEMA.to_owned())
                         }
-                        "/assets/7" if let_in => tiny_http::Response::from_string("")
-                            .with_status_code(302)
-                            .with_header(
-                                tiny_http::Header::from_bytes(
-                                    "Location",
-                                    format!("{base}/stored/7"),
-                                )
+                        "/netrc.json" => answer(401, String::new()),
+                        page if page.starts_with("/mock-org/public-repo/") => {
+                            answer(200, SCHEMA.to_owned())
+                        }
+                        page if page.starts_with("/mock-org/") => answer(404, String::new()),
+                        "/stored/7" if authorization.is_none() => answer(200, SCHEMA.to_owned()),
+                        "/stored/7" => answer(400, String::new()),
+                        _ if authorization.as_deref() == Some(BLIND_TOKEN) => {
+                            answer(404, String::new())
+                        }
+                        _ if authorization.as_deref() != Some(GOOD_TOKEN) => {
+                            answer(401, String::new())
+                        }
+                        "/repos/mock-org/mock-repo" => answer(200, "{}".to_owned()),
+                        "/repos/mock-org/mock-repo/releases/tags/mock%2Fv1.0"
+                        | "/repos/mock-org/mock-repo/releases/latest" => answer(200, assets),
+                        "/assets/7" => answer(302, String::new()).with_header(
+                            tiny_http::Header::from_bytes("Location", format!("{base}/stored/7"))
                                 .unwrap(),
-                            ),
-                        "/stored/7" if authorization.is_none() => {
-                            tiny_http::Response::from_string(SCHEMA)
-                        }
-                        "/stored/7" => tiny_http::Response::from_string("").with_status_code(400),
-                        _ => tiny_http::Response::from_string("").with_status_code(401),
+                        ),
+                        _ => answer(404, String::new()),
                     };
                     let _ = request.respond(response);
                 }
@@ -1043,6 +1172,23 @@ mod tests {
                 server,
                 serving: Some(serving),
             }
+        }
+
+        /// A link to `path` on this GitHub's pages.
+        fn link(&self, path: &str) -> String {
+            format!("{}/{path}", self.api)
+        }
+
+        /// Schema URL copies reading this GitHub with `credentials`.
+        fn copies(
+            &self,
+            scratch: &ScratchDirectory,
+            credentials: GivenCredentials,
+        ) -> SchemaUrlCopies {
+            let mut copies =
+                SchemaUrlCopies::with_credentials(&scratch.0, Box::new(credentials), &self.api);
+            copies.github_link_prefixes = vec![format!("{}/", self.api)];
+            copies
         }
     }
 
@@ -1055,42 +1201,132 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_release_link_names_its_repository_tag_and_asset() {
-        assert_eq!(
-            release_asset(RELEASE_LINK),
-            Some(ReleaseAsset {
-                owner: "mock-org".into(),
-                repository: "mock-repo".into(),
-                tag: "mock/v1.0".into(),
-                asset: "mock.schema.json".into(),
-            })
-        );
-        assert_eq!(
-            release_asset("https://github.com/mock-org/mock-repo/blob/main/a.json"),
-            None
-        );
+    fn tokens(tokens: Vec<Credential>) -> GivenCredentials {
+        GivenCredentials {
+            github: tokens,
+            login: None,
+        }
+    }
+
+    fn stale_token() -> Credential {
+        token("GH_TOKEN", "mock-stale-token", "replace `GH_TOKEN`")
+    }
+
+    fn good_token() -> Credential {
+        token("gh auth token", "mock-good-token", "run `gh auth login`")
     }
 
     #[test]
-    fn a_private_release_is_read_with_the_first_token_let_in_and_the_others_warned_of() {
+    fn a_github_link_names_its_repository_and_the_release_asset_its_path_reads() {
+        let tagged = github_release(PRIVATE_RELEASE).unwrap();
+        assert_eq!(
+            (tagged.owner.as_str(), tagged.repository.as_str()),
+            ("mock-org", "mock-repo")
+        );
+        assert_eq!(
+            tagged.asset,
+            Some(ReleaseAsset {
+                release: ReleaseName::Tag("mock/v1.0".into()),
+                asset: "mock.schema.json".into(),
+            })
+        );
+        let latest = github_release("mock-org/mock-repo/releases/latest/download/a.json?x=1");
+        assert_eq!(
+            latest.unwrap().asset,
+            Some(ReleaseAsset {
+                release: ReleaseName::Latest,
+                asset: "a.json".into(),
+            })
+        );
+        assert_eq!(
+            github_release("mock-org/mock-repo/releases/tag/v1")
+                .unwrap()
+                .asset,
+            None
+        );
+        assert_eq!(github_release("mock-org/mock-repo/blob/main/a.json"), None);
+    }
+
+    #[test]
+    fn a_link_without_the_opt_in_is_read_without_credentials_public_or_not() {
+        let github = MockGithub::start();
+        let scratch = ScratchDirectory::new("no-opt-in");
+        let copies = github.copies(&scratch, tokens(vec![good_token()]));
+        let public = copies.read(&github.link(PUBLIC_RELEASE)).unwrap();
+        assert_eq!((public.text.as_str(), public.warnings.len()), (SCHEMA, 0));
+        let private = copies.read(&github.link(PRIVATE_RELEASE)).unwrap_err();
+        assert_eq!(private.reason.as_deref(), Some("answered 404"));
+        assert_eq!(private.help, None);
+    }
+
+    #[test]
+    fn an_opted_in_public_link_is_read_without_credentials_and_no_token_warned_of() {
+        let github = MockGithub::start();
+        let scratch = ScratchDirectory::new("public-opt-in");
+        let copies = github.copies(&scratch, tokens(vec![stale_token()]));
+        let read = copies
+            .read(&format!("{}{OPT_IN}", github.link(PUBLIC_RELEASE)))
+            .unwrap();
+        assert_eq!((read.text.as_str(), read.warnings.len()), (SCHEMA, 0));
+    }
+
+    #[test]
+    fn an_opted_in_private_release_is_read_with_the_first_token_let_in_and_the_others_warned_of() {
         let github = MockGithub::start();
         let scratch = ScratchDirectory::new("release");
-        let tokens = vec![
-            token("GH_TOKEN", "mock-stale-token", "replace `GH_TOKEN`"),
-            token("gh auth token", "mock-good-token", "run `gh auth login`"),
-        ];
-        let copies = SchemaUrlCopies::with_credentials(
-            &scratch.0,
-            Box::new(GivenCredentials { github: tokens }),
-            &github.api,
-        );
-        let read = copies.read(RELEASE_LINK).unwrap();
+        let copies = github.copies(&scratch, tokens(vec![stale_token(), good_token()]));
+        let read = copies
+            .read(&format!("{}{OPT_IN}", github.link(PRIVATE_RELEASE)))
+            .unwrap();
         assert_eq!(read.text, SCHEMA);
         assert_eq!(read.warnings.len(), 1);
         assert!(
             read.warnings[0].contains("`GH_TOKEN`")
                 && read.warnings[0].contains("replace `GH_TOKEN`")
+        );
+        let latest = github.link("mock-org/mock-repo/releases/latest/download/mock.schema.json");
+        let scratch = ScratchDirectory::new("latest");
+        let copies = github.copies(&scratch, tokens(vec![good_token()]));
+        assert_eq!(
+            copies.read(&format!("{latest}{OPT_IN}")).unwrap().text,
+            SCHEMA
+        );
+    }
+
+    #[test]
+    fn a_release_or_an_asset_the_repository_lacks_is_reported_as_missing_never_as_a_credential() {
+        let github = MockGithub::start();
+        let scratch = ScratchDirectory::new("missing");
+        let copies = github.copies(&scratch, tokens(vec![good_token()]));
+        let absent_release =
+            github.link("mock-org/mock-repo/releases/download/v9/mock.schema.json");
+        let failure = copies
+            .read(&format!("{absent_release}{OPT_IN}"))
+            .unwrap_err();
+        assert_eq!(
+            failure.reason.as_deref(),
+            Some("`mock-org/mock-repo` has no release `v9`")
+        );
+        let absent_asset = github.link("mock-org/mock-repo/releases/download/mock/v1.0/other.json");
+        let failure = copies.read(&format!("{absent_asset}{OPT_IN}")).unwrap_err();
+        assert_eq!(
+            failure.reason.as_deref(),
+            Some("release `mock/v1.0` of `mock-org/mock-repo` has no asset `other.json`")
+        );
+    }
+
+    #[test]
+    fn a_repository_no_token_can_see_is_reported_by_name_with_the_refused_tokens_warned_of() {
+        let github = MockGithub::start();
+        let scratch = ScratchDirectory::new("unseen");
+        let blind = token("GITHUB_TOKEN", "mock-blind-token", "replace `GITHUB_TOKEN`");
+        let copies = github.copies(&scratch, tokens(vec![stale_token(), blind]));
+        let failure = copies
+            .read(&format!("{}{OPT_IN}", github.link(PRIVATE_RELEASE)))
+            .unwrap_err();
+        assert_eq!(
+            failure.reason.as_deref(),
+            Some("no credential can see `mock-org/mock-repo`")
         );
     }
 
@@ -1098,20 +1334,14 @@ mod tests {
     fn every_token_refused_reads_the_kept_copy_with_warnings_else_fails_naming_each() {
         let github = MockGithub::start();
         let scratch = ScratchDirectory::new("refused");
-        let expired = || {
-            Box::new(GivenCredentials {
-                github: vec![token(
-                    "gh auth token",
-                    "mock-expired-token",
-                    "run `gh auth login`",
-                )],
-            })
-        };
-        let copies = SchemaUrlCopies::with_credentials(&scratch.0, expired(), &github.api);
-        let failure = copies.read(RELEASE_LINK).unwrap_err();
+        let expired = token("gh auth token", "mock-expired-token", "run `gh auth login`");
+        let copies = github.copies(&scratch, tokens(vec![expired]));
+        let release = github.link(PRIVATE_RELEASE);
+        let opted_in = format!("{release}{OPT_IN}");
+        let failure = copies.read(&opted_in).unwrap_err();
         assert_eq!(
             failure.message,
-            format!("GitHub refused to read {RELEASE_LINK}")
+            format!("GitHub refused to read {opted_in}")
         );
         assert_eq!(
             failure.reason.as_deref(),
@@ -1119,18 +1349,43 @@ mod tests {
         );
         assert_eq!(failure.help.as_deref(), Some("run `gh auth login`"));
         copies.keep(
-            &copies.copy_path(RELEASE_LINK),
+            &copies.copy_path(&release),
             &KeptCopy {
-                url: RELEASE_LINK.to_owned(),
+                url: release.clone(),
                 etag: None,
                 last_modified: None,
                 confirmed_at: 0,
                 body: SCHEMA.to_owned(),
             },
         );
-        let read = copies.read(RELEASE_LINK).unwrap();
+        let read = copies.read(&opted_in).unwrap();
         assert_eq!(read.text, SCHEMA);
         assert_eq!(read.warnings.len(), 1);
+    }
+
+    #[test]
+    fn another_host_is_read_with_its_netrc_login_only_where_the_link_opts_in() {
+        let github = MockGithub::start();
+        let scratch = ScratchDirectory::new("netrc");
+        let login = Credential {
+            origin: "the `.netrc` entry for 127.0.0.1".to_owned(),
+            secret: crate::schema_credentials::Secret::Basic {
+                login: "mock-user".to_owned(),
+                password: "mock-secret".to_owned(),
+            },
+            fix: "update the `.netrc` entry for 127.0.0.1".to_owned(),
+        };
+        let credentials = GivenCredentials {
+            github: Vec::new(),
+            login: Some(login),
+        };
+        let copies = github.copies(&scratch, credentials);
+        let link = github.link("netrc.json");
+        assert!(copies.read(&link).is_err());
+        assert_eq!(
+            copies.read(&format!("{link}{OPT_IN}")).unwrap().text,
+            SCHEMA
+        );
     }
 
     const S3_LINK: &str = "s3://mock-schemas/mock/1.0/mock.schema.json";
@@ -1305,10 +1560,20 @@ echo '{"ETag": "\"mock-s3-etag\""}'
             Ok(EditorParameters {
                 fetch_url: "https://mock.example/s.json?b=2&a=1".into(),
                 max_age_days: 7,
+                machine_credentials: false,
             })
         );
         assert!(editor_parameters("https://mock.example/s.json?yaml_dsl_other=1").is_err());
         assert!(editor_parameters("https://mock.example/s.json?yaml_dsl_max_age_days=x").is_err());
+        let opted_in = "https://mock.example/s.json?yaml_dsl_machine_credentials=true";
+        assert!(editor_parameters(opted_in).unwrap().machine_credentials);
+        let opted_out = "https://mock.example/s.json?yaml_dsl_machine_credentials=false";
+        assert!(!editor_parameters(opted_out).unwrap().machine_credentials);
+        let misspelt = "https://mock.example/s.json?yaml_dsl_machine_credentials=yes";
+        assert_eq!(
+            editor_parameters(misspelt),
+            Err("`yaml_dsl_machine_credentials` must be `true` or `false`".to_owned())
+        );
     }
 
     #[test]
