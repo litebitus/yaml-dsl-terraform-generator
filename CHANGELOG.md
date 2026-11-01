@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.1 — 2026-11-01
+
 - Generation
   - `tfgen.yml` states its format, `version: "1"` or `"1.0"`; each release attaches its JSON Schema, every minor's and each major's as its newest minor.
   - Examples of both module layouts: one module at one pin, and a module per component.
