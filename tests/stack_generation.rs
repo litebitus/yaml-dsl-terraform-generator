@@ -483,7 +483,7 @@ fn a_generator_schema_is_the_fallback_when_the_modeline_names_none() {
     let initialized = workspace.run(&[]);
     let errors = String::from_utf8_lossy(&initialized.stderr);
     assert!(
-        errors.contains("field `mock_initialized` is required"),
+        errors.contains("`mock_initialized` is required"),
         "{errors}"
     );
     workspace.write(
@@ -519,19 +519,13 @@ fn a_schema_named_for_the_run_goes_ahead_of_the_modeline() {
     );
     let flagged = workspace.run(&["--schema", "mock-dsl=local/changed.schema.json"]);
     let errors = String::from_utf8_lossy(&flagged.stderr);
-    assert!(
-        errors.contains("field `mock_changed` is required"),
-        "{errors}"
-    );
+    assert!(errors.contains("`mock_changed` is required"), "{errors}");
     let variable = workspace.run_with(
         &[],
         &[("TFGEN_SCHEMA", "mock-dsl=local/changed.schema.json")],
     );
     let errors = String::from_utf8_lossy(&variable.stderr);
-    assert!(
-        errors.contains("field `mock_changed` is required"),
-        "{errors}"
-    );
+    assert!(errors.contains("`mock_changed` is required"), "{errors}");
     let flag_wins = workspace.run_with(
         &["--schema", "mock-dsl=per-component/mock.schema.json"],
         &[("TFGEN_SCHEMA", "mock-dsl=local/changed.schema.json")],
@@ -612,9 +606,51 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
     assert!(
+        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`"),
+        "{errors}"
+    );
+    assert!(
         errors.contains("`version` is one of `\"1\"`, `\"1.0\"`"),
         "{errors}"
     );
+}
+
+#[test]
+fn a_config_problem_is_worded_as_the_standard_words_it() {
+    let workspace = MockWorkspace::new("config-wording");
+    one_module_workspace(&workspace);
+    let cases = [
+        (
+            "each: declaration",
+            "each: declarations",
+            "`each` must be one of",
+        ),
+        (
+            "written_to: main.tf",
+            "writen_to: main.tf",
+            "`written_to` is required",
+        ),
+        (
+            "scope: ENTRY",
+            "scope: ENTRY\n        scop: ENTRY",
+            "`scop` is not a field of",
+        ),
+        (
+            "each: declaration",
+            "each: [declaration]",
+            "`each` must be string",
+        ),
+    ];
+    for (written, misspelt, expected) in cases {
+        workspace.write(
+            "tfgen.yml",
+            &ONE_MODULE_CONFIG.replacen(written, misspelt, 1),
+        );
+        let output = workspace.run(&["--no-color"]);
+        assert!(!output.status.success());
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert!(errors.contains(expected), "{errors}");
+    }
 }
 
 #[test]

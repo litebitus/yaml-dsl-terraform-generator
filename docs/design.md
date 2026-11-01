@@ -561,7 +561,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
 - An error is reported as a compiler reports one:
 
   ```
-  error: field `brnch` is not allowed
+  error: `brnch` is not a field of `publish`
     --> services/mock-api/mock-dsl.yml:57:5
      |
   52 | workflow:

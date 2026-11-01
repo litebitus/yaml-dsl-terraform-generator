@@ -396,13 +396,13 @@ mod tests {
             ),
         );
         let file: Arc<str> = Arc::from(scratch.0.to_string_lossy().as_ref());
-        let diagnostic =
-            Diagnostic::at(&Position::new(&file, 6, 5), "field `brnch` is not allowed")
-                .with_label("`name mock-orders` has no field `brnch`")
-                .with_rule(
-                    "unevaluatedProperties, at mock.schema.json#/$defs/queue/unevaluatedProperties",
-                )
-                .with_help(Some("did you mean `branch`?".to_owned()));
+        let message = "`brnch` is not a field of `name mock-orders`";
+        let diagnostic = Diagnostic::at(&Position::new(&file, 6, 5), message)
+            .with_label("`name mock-orders` has no field `brnch`")
+            .with_rule(
+                "unevaluatedProperties, at mock.schema.json#/$defs/queue/unevaluatedProperties",
+            )
+            .with_help(Some("did you mean `branch`?".to_owned()));
         let root = scratch.0.parent().unwrap().to_path_buf();
         let text = report(
             &diagnostic,
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(
             text,
             concat!(
-                "error: field `brnch` is not allowed\n",
+                "error: `brnch` is not a field of `name mock-orders`\n",
                 " --> mock-dsl.yml:6:5\n",
                 "  |\n",
                 "1 | queue:\n",

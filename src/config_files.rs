@@ -482,11 +482,10 @@ fn config_version(node: &Node) -> Result<(), Diagnostic> {
         .map(|version| format!("`\"{version}\"`"))
         .collect::<Vec<_>>()
         .join(", ");
-    Err(Diagnostic::at(
-        &node.position,
-        format!("`{version}` is not an allowed value"),
+    Err(
+        Diagnostic::at(&node.position, format!("`version` must be one of {listed}"))
+            .with_label(format!("`version` is one of {listed}")),
     )
-    .with_label(format!("`version` is one of {listed}")))
 }
 
 /// The roots every template reads.
@@ -512,7 +511,12 @@ fn block_each_root(each: &Node) -> Result<FixedRoot, Diagnostic> {
                 .map(|kind| format!("`{kind}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            Diagnostic::at(&each.position, format!("`{kind}` is not an allowed value"))
+            let allowed = kinds
+                .iter()
+                .map(|kind| format!("`\"{kind}\"`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Diagnostic::at(&each.position, format!("`each` must be one of {allowed}"))
                 .with_label(format!("`each` is one of {listed}"))
                 .with_help(did_you_mean(&kind, &kinds))
         })
@@ -605,7 +609,7 @@ struct MapReader<'n> {
 impl<'n> MapReader<'n> {
     fn new(node: &'n Node, what: &str) -> Result<Self, Diagnostic> {
         if !node.is_map() {
-            return Err(not_a(node, what, "a map"));
+            return Err(type_problem(node, what, "object"));
         }
         Ok(Self {
             node,
@@ -622,7 +626,7 @@ impl<'n> MapReader<'n> {
     fn required(&mut self, key: &'static str) -> Result<&'n Node, Diagnostic> {
         let what = self.what.clone();
         self.optional(key).ok_or_else(|| {
-            Diagnostic::at(&self.node.position, format!("field `{key}` is required"))
+            Diagnostic::at(&self.node.position, format!("`{key}` is required"))
                 .with_label(format!("{what} has no field `{key}`"))
         })
     }
@@ -633,7 +637,7 @@ impl<'n> MapReader<'n> {
                 let fields: Vec<String> = self.read.iter().map(|key| (*key).to_owned()).collect();
                 return Err(Diagnostic::at(
                     &entry.key_position,
-                    format!("field `{}` is not allowed", entry.key),
+                    format!("`{}` is not a field of {}", entry.key, self.what),
                 )
                 .with_label(format!("{} has no field `{}`", self.what, entry.key))
                 .with_help(did_you_mean(&entry.key, &fields)));
@@ -643,24 +647,26 @@ impl<'n> MapReader<'n> {
     }
 }
 
-/// A node of the wrong kind: what it should be, and what it is.
-fn not_a(node: &Node, what: &str, expected: &str) -> Diagnostic {
-    Diagnostic::at(&node.position, format!("{what} is not {expected}"))
+/// A node of the wrong kind: the JSON type it must be, and what it is.
+fn type_problem(node: &Node, what: &str, expected_type: &str) -> Diagnostic {
+    Diagnostic::at(&node.position, format!("{what} must be {expected_type}"))
         .with_label(format!("is {}", kind_of(node)))
 }
 
 fn entries<'n>(node: &'n Node, what: &str) -> Result<&'n [Entry], Diagnostic> {
-    node.entries().ok_or_else(|| not_a(node, what, "a map"))
+    node.entries()
+        .ok_or_else(|| type_problem(node, what, "object"))
 }
 
 fn items<'n>(node: &'n Node, what: &str) -> Result<&'n [Node], Diagnostic> {
-    node.items().ok_or_else(|| not_a(node, what, "a list"))
+    node.items()
+        .ok_or_else(|| type_problem(node, what, "array"))
 }
 
 fn text(node: &Node, what: &str) -> Result<String, Diagnostic> {
     node.as_str()
         .map(str::to_owned)
-        .ok_or_else(|| not_a(node, what, "text"))
+        .ok_or_else(|| type_problem(node, what, "string"))
 }
 
 fn texts(node: &Node, what: &str) -> Result<Vec<String>, Diagnostic> {
