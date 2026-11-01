@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -35,6 +35,9 @@ jobs:
 
       - name: Set up Rust
         run: rustup toolchain install
+
+      - name: Cache the cargo registry, tools and builds
+        uses: Swatinem/rust-cache@v2.9.3
 
       - name: Set up Go
         uses: actions/setup-go@v7.0.0
@@ -126,8 +129,9 @@ jobs:
         run: |
           set -euo pipefail
           awk '/^## Unreleased$/ { inside = 1; next } /^## / { inside = 0 } inside' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
-          sed -i "s/^## Unreleased$/## Unreleased\n\n## ${NEXT} — $(date -u +%Y-%m-%d)/" CHANGELOG.md
-          sed -i "0,/^version = \".*\"$/s//version = \"${NEXT#v}\"/" Cargo.toml
+          export RELEASE_DATE="$(date -u +%Y-%m-%d)" VERSION_NUMBER="${NEXT#v}"
+          perl -pi -e 's/^## Unreleased$/## Unreleased\n\n## $ENV{NEXT} — $ENV{RELEASE_DATE}/' CHANGELOG.md
+          perl -pi -e '$stamped ||= s/^version = ".*"$/version = "$ENV{VERSION_NUMBER}"/' Cargo.toml
           cargo update --workspace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
