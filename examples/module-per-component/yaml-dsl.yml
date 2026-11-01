@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://github.com/litebitus/yaml-dsl-spec/releases/download/v0.0.1/yaml-dsl-v1.schema.json
+# yaml-language-server: $schema=https://github.com/litebitus/yaml-dsl-spec/releases/download/v0.1.1/yaml-dsl-v1.schema.json
 version: "1"
 dsls:
   - id: mock-dsl
