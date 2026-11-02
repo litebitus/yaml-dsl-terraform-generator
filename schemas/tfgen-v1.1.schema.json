@@ -47,7 +47,7 @@
           "type": "integer",
           "minimum": 1,
           "default": 100,
-          "description": "Schema URL copies kept; the least recently used is dropped first."
+          "description": "How many schemas the schema cache keeps; the least recently used is dropped first."
         }
       }
     }

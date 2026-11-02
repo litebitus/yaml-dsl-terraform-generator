@@ -1,4 +1,4 @@
-//! Schemas read from URLs, and the copies kept of them, by the editor's rules:
+//! Schemas read from URLs, and the schema cache keeping a copy of each, by the editor's rules:
 //! `http(s)://` links, GitHub release assets, and `s3://` objects through the AWS
 //! command line, as a role the link's `assume_role` names where it names one.
 
@@ -45,8 +45,8 @@ pub fn is_schema_url(location: &str) -> bool {
         .any(|scheme| location.starts_with(scheme))
 }
 
-/// Where the copies of schema URLs are kept: the user's cache folder, across runs.
-pub fn schema_url_copies_directory() -> PathBuf {
+/// Where the schema cache is kept: the user's cache folder, across runs.
+pub fn schema_cache_directory() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
@@ -55,12 +55,12 @@ pub fn schema_url_copies_directory() -> PathBuf {
         None if cfg!(target_os = "macos") => home.join("Library/Caches"),
         None => home.join(".cache"),
     };
-    cache.join("tfgen/schema-urls")
+    cache.join("tfgen/schema-cache")
 }
 
-/// Downloads schema URLs and keeps a copy of each in a folder the caller names,
-/// up to its capacity, the least recently used dropped first.
-pub struct SchemaUrlCopies {
+/// The schema cache: downloads schema URLs and keeps a copy of each in a folder the
+/// caller names, up to its capacity, the least recently used dropped first.
+pub struct SchemaCache {
     directory: PathBuf,
     capacity: usize,
     agent: ureq::Agent,
@@ -246,7 +246,7 @@ enum Answer {
     Failed(String),
 }
 
-impl SchemaUrlCopies {
+impl SchemaCache {
     pub fn new(directory: impl Into<PathBuf>, capacity: usize) -> Self {
         Self::with_credentials(
             directory,
@@ -1098,7 +1098,7 @@ mod tests {
     impl ScratchDirectory {
         fn new(name: &str) -> Self {
             let path =
-                std::env::temp_dir().join(format!("schema-urls-{name}-{}", std::process::id()));
+                std::env::temp_dir().join(format!("schema-cache-{name}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             Self(path)
         }
@@ -1217,13 +1217,9 @@ mod tests {
             format!("{}/{path}", self.api)
         }
 
-        /// Schema URL copies reading this GitHub with `credentials`.
-        fn copies(
-            &self,
-            scratch: &ScratchDirectory,
-            credentials: GivenCredentials,
-        ) -> SchemaUrlCopies {
-            let mut copies = SchemaUrlCopies::with_credentials(
+        /// A schema cache reading this GitHub with `credentials`.
+        fn copies(&self, scratch: &ScratchDirectory, credentials: GivenCredentials) -> SchemaCache {
+            let mut copies = SchemaCache::with_credentials(
                 &scratch.0,
                 MOCK_CAPACITY,
                 Box::new(credentials),
@@ -1485,7 +1481,7 @@ printf '%s' '{"type": "object"}' > "$out"
 echo '{"ETag": "\"mock-s3-etag\""}'
 "#;
 
-    fn aws_copies(scratch: &ScratchDirectory, script: &str) -> SchemaUrlCopies {
+    fn aws_copies(scratch: &ScratchDirectory, script: &str) -> SchemaCache {
         let command = scratch.0.join("mock-aws");
         fs::create_dir_all(&scratch.0).unwrap();
         fs::write(&command, script).unwrap();
@@ -1494,7 +1490,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let mut copies = SchemaUrlCopies::with_credentials(
+        let mut copies = SchemaCache::with_credentials(
             scratch.0.join("copies"),
             MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
@@ -1623,7 +1619,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
     fn a_copy_younger_than_its_max_age_is_read_without_asking_the_server() {
         let server = MockSchemaServer::start();
         let scratch = ScratchDirectory::new("max-age");
-        let copies = SchemaUrlCopies::with_credentials(
+        let copies = SchemaCache::with_credentials(
             &scratch.0,
             MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
@@ -1639,7 +1635,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
     fn with_no_max_age_the_copy_is_checked_and_a_304_keeps_it() {
         let server = MockSchemaServer::start();
         let scratch = ScratchDirectory::new("checked");
-        let copies = SchemaUrlCopies::with_credentials(
+        let copies = SchemaCache::with_credentials(
             &scratch.0,
             MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
@@ -1654,7 +1650,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
     fn the_kept_copy_is_read_when_the_server_does_not_answer() {
         let server = SilentServer::start();
         let scratch = ScratchDirectory::new("offline");
-        let copies = SchemaUrlCopies::with_credentials(
+        let copies = SchemaCache::with_credentials(
             &scratch.0,
             MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
@@ -1678,7 +1674,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
     #[test]
     fn the_least_recently_used_copies_beyond_the_capacity_are_dropped() {
         let scratch = ScratchDirectory::new("capacity");
-        let copies = SchemaUrlCopies::with_credentials(
+        let copies = SchemaCache::with_credentials(
             &scratch.0,
             2,
             Box::new(GivenCredentials::default()),

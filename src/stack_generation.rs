@@ -17,9 +17,9 @@ use crate::config_files::{
 use crate::error_report::did_you_mean;
 use crate::generated_files::header_comment;
 use crate::ref_scope::{FixedRoot, GeneratorContext, RefFrame, StackContext};
+use crate::schema_cache::SchemaCache;
 use crate::schema_lookup::{SchemaSource, StackSchemas};
 use crate::schema_overrides::SchemaOverrides;
-use crate::schema_url_copies::SchemaUrlCopies;
 use crate::stack_discovery::git_files;
 use crate::template_filling::fill_body;
 use crate::value_writing::ValueWriter;
@@ -47,7 +47,7 @@ pub struct StackJob<'c> {
     /// By DSL id, the schema this run reads the DSL's documents against.
     pub schema_overrides: &'c SchemaOverrides,
     /// Schema URLs read this run, with the copies kept of them.
-    pub schema_urls: &'c SchemaUrlCopies,
+    pub schema_cache: &'c SchemaCache,
 }
 
 /// The files a stack's generation writes, by path.
@@ -125,7 +125,7 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
             generator,
             &early_context,
             schema_override,
-            job.schema_urls,
+            job.schema_cache,
             &job.config.directory,
         );
         match compiled_document {
@@ -337,7 +337,7 @@ fn compile_document(
     generator: &Generator,
     context: &StackContext<'_>,
     schema_override: Option<&str>,
-    url_copies: &SchemaUrlCopies,
+    schema_cache: &SchemaCache,
     config_root: &Path,
 ) -> Result<Option<ResolvedUnit>, Vec<Diagnostic>> {
     let compiler = dsl
@@ -370,7 +370,7 @@ fn compile_document(
         config_root,
         run_schema: schema_override,
         search_paths: generator_schema.as_deref().unwrap_or(&dsl.search_paths),
-        url_copies,
+        schema_cache,
     };
     let options = ResolveOptions {
         builtins: Some(&StackBuiltins(builtins)),

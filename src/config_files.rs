@@ -52,7 +52,7 @@ pub struct TfgenConfig {
     pub globals: Vec<(String, Node)>,
     pub generators: Vec<Generator>,
     pub stack_templates: Vec<(String, StackTemplate)>,
-    /// How many schema URL copies are kept, the least recently used dropped first.
+    /// How many schemas the schema cache keeps, the least recently used dropped first.
     pub schema_cache_capacity: usize,
 }
 

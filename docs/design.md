@@ -262,7 +262,7 @@ output "orders_url" {
 
 A path is relative to the document, or to the config's folder when it starts with `{config_root}`, and a search path's steps may hold `*`, matching within one step, the first file in path order taken. A modeline's path is the path it writes.
 
-A URL is read by the YAML DSL standard's rules for schema URLs, [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/spec.md) under Schema URLs: `yaml_dsl_max_age_days`, the check with `ETag` and `Last-Modified`, the kept copy when the source does not answer, and the read without credentials first, with the machine's credentials only where the link carries `yaml_dsl_machine_credentials=true` and that read is refused. Its copies are kept in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-urls`, else `~/Library/Caches/tfgen/schema-urls` on macOS and `~/.cache/tfgen/schema-urls` elsewhere.
+A URL is read by the YAML DSL standard's rules for schema URLs, [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/spec.md) under Schema URLs: `yaml_dsl_max_age_days`, the check with `ETag` and `Last-Modified`, the kept copy when the source does not answer, and the read without credentials first, with the machine's credentials only where the link carries `yaml_dsl_machine_credentials=true` and that read is refused. Its copies are kept in the schema cache, in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-cache`, else `~/Library/Caches/tfgen/schema-cache` on macOS and `~/.cache/tfgen/schema-cache` elsewhere.
 
 `tfgen` also reads an S3 object, `s3://<bucket>/<key>`, or `s3://<bucket>/<key>?assume_role=<role ARN>`, through the AWS command line, `aws s3api get-object`, always with the machine's AWS credentials: `AWS_PROFILE` and the other variables, `~/.aws` profiles with SSO, or a role. With `assume_role`, it reads as that role, assumed first with `aws sts assume-role`.
 
@@ -590,7 +590,7 @@ A run's cost grows with the stacks it compiles and never with the size of the re
 
 `tfgen.yml`'s `performance`, from format 1.1, tunes a run:
 
-- `schema_cache_capacity` is how many schema URL copies the cache folder keeps, a whole number from 1, its default stated in the schema. After a run, the least recently used copies beyond it are dropped. A run reading several config folders keeps the largest capacity among them.
+- `schema_cache_capacity` is how many schemas the schema cache keeps, a whole number from 1, its default stated in the schema. After a run, the least recently used schemas beyond it are dropped. A run reading several config folders keeps the largest capacity among them.
 
 ## Release
 

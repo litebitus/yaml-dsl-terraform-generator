@@ -10,7 +10,7 @@ use globset::Glob;
 use yaml_dsl_compiler::{DocumentSchema, SchemaProvider, Unit};
 use yaml_dsl_spec::{Diagnostic, Position};
 
-use crate::schema_url_copies::{ReadFailure, SchemaUrlCopies, is_schema_url};
+use crate::schema_cache::{ReadFailure, SchemaCache, is_schema_url};
 
 const MODELINE_MARKER: &str = "yaml-language-server: $schema=";
 const CONFIG_ROOT: &str = "{config_root}";
@@ -22,7 +22,7 @@ pub struct StackSchemas<'s> {
     pub run_schema: Option<&'s str>,
     /// The generator's `schema` list, its refs filled, else the DSL's search paths.
     pub search_paths: &'s [SchemaSource],
-    pub url_copies: &'s SchemaUrlCopies,
+    pub schema_cache: &'s SchemaCache,
 }
 
 /// A path, path pattern or URL a schema is looked for at, and where it was written,
@@ -106,7 +106,7 @@ impl StackSchemas<'_> {
         written_at: Option<&Position>,
     ) -> Result<(String, String, Vec<String>), Diagnostic> {
         let read = self
-            .url_copies
+            .schema_cache
             .read(url)
             .map_err(|failure| read_failure(failure, written_at))?;
         Ok((url.to_owned(), read.text, read.warnings))
@@ -265,13 +265,13 @@ mod tests {
         root: &'s Path,
         run_schema: Option<&'s str>,
         search_paths: &'s [SchemaSource],
-        url_copies: &'s SchemaUrlCopies,
+        schema_cache: &'s SchemaCache,
     ) -> StackSchemas<'s> {
         StackSchemas {
             config_root: root,
             run_schema,
             search_paths,
-            url_copies,
+            schema_cache,
         }
     }
 
@@ -286,7 +286,7 @@ mod tests {
             "stack/.terraform/modules/key_a/mock.schema.json",
             r#"{"title": "a"}"#,
         );
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
+        let copies = SchemaCache::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&[".terraform/modules/*/mock.schema.json"]);
         let found = schemas(&scratch.0, None, &search_paths, &copies)
             .schema_of(&unit_in(&scratch.0), "queue: {}\n")
@@ -300,7 +300,7 @@ mod tests {
         scratch.write("stack/local.json", r#"{"title": "modeline"}"#);
         scratch.write("search.json", r#"{"title": "search"}"#);
         scratch.write("work/changed.json", r#"{"title": "run"}"#);
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
+        let copies = SchemaCache::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&["{config_root}/search.json"]);
         let unit = unit_in(&scratch.0);
         let text = "# yaml-language-server: $schema=local.json#/properties/queue\nqueue: {}\n";
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn a_url_not_read_is_reported_where_it_was_written() {
         let scratch = ScratchFolder::new("unread");
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
+        let copies = SchemaCache::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&["absent.json", "http://127.0.0.1:9/mock.schema.json"]);
         let unit = unit_in(&scratch.0);
         let searched = schemas(&scratch.0, None, &search_paths, &copies)

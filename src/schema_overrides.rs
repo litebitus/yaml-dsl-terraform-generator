@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::schema_url_copies::is_schema_url;
+use crate::schema_cache::is_schema_url;
 
 pub const SCHEMA_VARIABLE: &str = "TFGEN_SCHEMA";
 const PAIR_SEPARATOR: char = ',';

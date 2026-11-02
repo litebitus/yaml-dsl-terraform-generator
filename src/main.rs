@@ -10,10 +10,10 @@ mod hcl_conversion;
 mod line_wrapping;
 mod ref_paths;
 mod ref_scope;
+mod schema_cache;
 mod schema_credentials;
 mod schema_lookup;
 mod schema_overrides;
-mod schema_url_copies;
 mod shell_completion;
 mod stack_descriptor;
 mod stack_discovery;
@@ -39,8 +39,8 @@ use crate::config_files::{
 use crate::disk_source::DiskSource;
 use crate::error_report::{ReportStyle, Severity, SourceFiles, report};
 use crate::generated_files::{FileChange, write_stack_files};
+use crate::schema_cache::{SchemaCache, schema_cache_directory};
 use crate::schema_overrides::{SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, variable_pairs};
-use crate::schema_url_copies::{SchemaUrlCopies, schema_url_copies_directory};
 use crate::shell_completion::candidates;
 use crate::stack_descriptor::{TFGEN_GLOBAL, read_globals};
 use crate::stack_discovery::{named_stacks, repository_root, repository_stacks};
@@ -209,7 +209,7 @@ fn run(
         .map(LoadedConfig::schema_cache_capacity)
         .max()
         .unwrap_or(DEFAULT_SCHEMA_CACHE_CAPACITY);
-    let schema_urls = SchemaUrlCopies::new(schema_url_copies_directory(), schema_cache_capacity);
+    let schema_cache = SchemaCache::new(schema_cache_directory(), schema_cache_capacity);
     let mut succeeded = true;
     for (directory, result) in &configs {
         if let Err(diagnostics) = result {
@@ -270,11 +270,11 @@ fn run(
             config,
             repository_root: &root,
             schema_overrides,
-            schema_urls: &schema_urls,
+            schema_cache: &schema_cache,
         });
     }
     let results: Vec<_> = jobs.par_iter().map(generate_stack).collect();
-    schema_urls.drop_least_recently_used();
+    schema_cache.drop_least_recently_used();
     let mut changed_stacks: Vec<(String, Vec<(String, FileChange)>)> = Vec::new();
     let mut compared = 0;
     for (job, result) in jobs.iter().zip(results) {

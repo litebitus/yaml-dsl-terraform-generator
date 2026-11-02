@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+- Generation
+  - Writes HCL indented as `terraform fmt` indents it, through yaml-dsl-compiler 0.1.3.
 - Schemas
-  - `tfgen.yml` 1.1 takes `performance.schema_cache_capacity`, the schema URL copies kept, the least recently used dropped first.
+  - `tfgen.yml` 1.1 takes `performance.schema_cache_capacity`, how many schemas the schema cache keeps, the least recently used dropped first.
+  - The schema cache is kept in the cache folder's `tfgen/schema-cache`.
 
 ## v0.0.4 — 2026-11-01
 
