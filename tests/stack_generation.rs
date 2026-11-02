@@ -199,6 +199,7 @@ impl MockWorkspace {
         Command::new(env!("CARGO_BIN_EXE_tfgen"))
             .args(arguments)
             .env_remove("TFGEN_SCHEMA")
+            .env("XDG_CACHE_HOME", self.root.join(".cache"))
             .envs(variables.iter().copied())
             .current_dir(&self.root)
             .output()
@@ -606,12 +607,47 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
     assert!(
-        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`"),
+        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`"),
         "{errors}"
     );
     assert!(
-        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`"),
+        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`"),
         "{errors}"
+    );
+}
+
+#[test]
+fn the_schema_cache_capacity_is_a_whole_number_from_one_of_format_1_1() {
+    let workspace = MockWorkspace::new("schema-cache-capacity");
+    one_module_workspace(&workspace);
+    let cases = [
+        ("1.1", "0", "`schema_cache_capacity` must be >= 1"),
+        ("1.1", "many", "`schema_cache_capacity` must be integer"),
+        ("1.0", "100", "`performance` is not a field of tfgen.yml"),
+    ];
+    for (version, capacity, message) in cases {
+        let config = ONE_MODULE_CONFIG.replacen(
+            "version: \"1\"",
+            &format!("version: \"{version}\"\nperformance:\n  schema_cache_capacity: {capacity}"),
+            1,
+        );
+        workspace.write("tfgen.yml", &config);
+        let output = workspace.run(&["--no-color"]);
+        assert!(!output.status.success());
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert!(errors.contains(message), "{errors}");
+    }
+    let config = ONE_MODULE_CONFIG.replacen(
+        "version: \"1\"",
+        "version: \"1.1\"\nperformance:\n  schema_cache_capacity: 1",
+        1,
+    );
+    workspace.write("tfgen.yml", &config);
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -691,7 +727,7 @@ fn each_example_generates_the_files_it_commits() {
 fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let schema: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(manifest.join("schemas/tfgen-v1.0.schema.json")).unwrap(),
+        &fs::read_to_string(manifest.join("schemas/tfgen-v1.1.schema.json")).unwrap(),
     )
     .unwrap();
     let validator = jsonschema::draft202012::new(&schema).unwrap();

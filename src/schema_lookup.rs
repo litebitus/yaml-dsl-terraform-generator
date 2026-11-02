@@ -259,6 +259,8 @@ mod tests {
             .collect()
     }
 
+    const MOCK_CAPACITY: usize = 8;
+
     fn schemas<'s>(
         root: &'s Path,
         run_schema: Option<&'s str>,
@@ -284,7 +286,7 @@ mod tests {
             "stack/.terraform/modules/key_a/mock.schema.json",
             r#"{"title": "a"}"#,
         );
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"));
+        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&[".terraform/modules/*/mock.schema.json"]);
         let found = schemas(&scratch.0, None, &search_paths, &copies)
             .schema_of(&unit_in(&scratch.0), "queue: {}\n")
@@ -298,7 +300,7 @@ mod tests {
         scratch.write("stack/local.json", r#"{"title": "modeline"}"#);
         scratch.write("search.json", r#"{"title": "search"}"#);
         scratch.write("work/changed.json", r#"{"title": "run"}"#);
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"));
+        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&["{config_root}/search.json"]);
         let unit = unit_in(&scratch.0);
         let text = "# yaml-language-server: $schema=local.json#/properties/queue\nqueue: {}\n";
@@ -332,7 +334,7 @@ mod tests {
     #[test]
     fn a_url_not_read_is_reported_where_it_was_written() {
         let scratch = ScratchFolder::new("unread");
-        let copies = SchemaUrlCopies::new(scratch.0.join("copies"));
+        let copies = SchemaUrlCopies::new(scratch.0.join("copies"), MOCK_CAPACITY);
         let search_paths = sources(&["absent.json", "http://127.0.0.1:9/mock.schema.json"]);
         let unit = unit_in(&scratch.0);
         let searched = schemas(&scratch.0, None, &search_paths, &copies)

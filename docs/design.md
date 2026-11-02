@@ -78,7 +78,7 @@ Nothing reads a document at plan time. Validation runs when `tfgen` generates, a
 version: "1"
 ```
 
-- `version` is required: `"1.0"`, or `"1"` for the newest 1.x tfgen reads; a version tfgen does not read is an error at the value.
+- `version` is required: `"1.0"` or `"1.1"`, or `"1"` for the newest 1.x tfgen reads; a version tfgen does not read is an error at the value.
 - Its JSON Schema, `schemas/tfgen-v<version>.schema.json` for each minor, describes each field. Each release attaches every minor's, and each major's as its newest minor, for a modeline to name.
 
 ### Stacks
@@ -587,6 +587,10 @@ A run's cost grows with the stacks it compiles and never with the size of the re
 - `tfgen` never walks the repo. `--stack` reads the named stack's descriptor, its documents, the documents its `imports` name and the common layers its DSL's layers name. A run of every stack takes the stacks from git, `git ls-files --cached --others --exclude-standard`, so a stack counts before it is tracked and ignored paths are never entered.
 - A document is parsed once, however many stacks read it, and a schema is read and compiled once per run.
 - Stacks compile in parallel.
+
+`tfgen.yml`'s `performance`, from format 1.1, tunes a run:
+
+- `schema_cache_capacity` is how many schema URL copies the cache folder keeps, a whole number from 1, its default stated in the schema. After a run, the least recently used copies beyond it are dropped. A run reading several config folders keeps the largest capacity among them.
 
 ## Release
 

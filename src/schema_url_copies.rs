@@ -36,6 +36,7 @@ const AWS_TIMEOUT: Duration = Duration::from_secs(60);
 const ASSUME_ROLE_PARAMETER: &str = "assume_role";
 const ROLE_SESSION_NAME: &str = "tfgen";
 const COMMAND_POLL: Duration = Duration::from_millis(20);
+const COPY_EXTENSION: &str = "json";
 
 /// Whether a schema location is a URL rather than a path.
 pub fn is_schema_url(location: &str) -> bool {
@@ -57,9 +58,11 @@ pub fn schema_url_copies_directory() -> PathBuf {
     cache.join("tfgen/schema-urls")
 }
 
-/// Downloads schema URLs and keeps a copy of each in a folder the caller names.
+/// Downloads schema URLs and keeps a copy of each in a folder the caller names,
+/// up to its capacity, the least recently used dropped first.
 pub struct SchemaUrlCopies {
     directory: PathBuf,
+    capacity: usize,
     agent: ureq::Agent,
     credentials: Box<dyn CredentialSource>,
     github_api: String,
@@ -244,9 +247,10 @@ enum Answer {
 }
 
 impl SchemaUrlCopies {
-    pub fn new(directory: impl Into<PathBuf>) -> Self {
+    pub fn new(directory: impl Into<PathBuf>, capacity: usize) -> Self {
         Self::with_credentials(
             directory,
+            capacity,
             Box::new(MachineCredentials::default()),
             GITHUB_API,
         )
@@ -254,6 +258,7 @@ impl SchemaUrlCopies {
 
     fn with_credentials(
         directory: impl Into<PathBuf>,
+        capacity: usize,
         credentials: Box<dyn CredentialSource>,
         github_api: &str,
     ) -> Self {
@@ -264,6 +269,7 @@ impl SchemaUrlCopies {
             .into();
         Self {
             directory: directory.into(),
+            capacity,
             agent,
             credentials,
             github_api: github_api.to_owned(),
@@ -288,6 +294,7 @@ impl SchemaUrlCopies {
             && parameters.max_age_days > 0
             && now.saturating_sub(kept.confirmed_at) < parameters.max_age_days * DAY_SECONDS
         {
+            mark_used(&copy_path);
             return Ok(SchemaText {
                 text: kept.body.clone(),
                 warnings: Vec::new(),
@@ -330,12 +337,14 @@ impl SchemaUrlCopies {
                     "{refuser} refused to read {url}, so its kept copy was read \
                      ({reasons}): {fixes}"
                 ));
+                mark_used(&copy_path);
                 return Ok(SchemaText {
                     text: kept.body,
                     warnings,
                 });
             }
             (Answer::Failed(_), Some(kept)) => {
+                mark_used(&copy_path);
                 return Ok(SchemaText {
                     text: kept.body,
                     warnings,
@@ -676,7 +685,27 @@ impl SchemaUrlCopies {
     fn copy_path(&self, fetch_url: &str) -> PathBuf {
         let digest = Sha256::digest(fetch_url.as_bytes());
         let name: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-        self.directory.join(format!("{name}.json"))
+        self.directory.join(format!("{name}.{COPY_EXTENSION}"))
+    }
+
+    /// Drops the least recently used copies beyond the capacity.
+    pub fn drop_least_recently_used(&self) {
+        let Ok(listing) = fs::read_dir(&self.directory) else {
+            return;
+        };
+        let mut copies: Vec<(SystemTime, PathBuf)> = listing
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == COPY_EXTENSION)
+            })
+            .filter_map(|path| Some((fs::metadata(&path).ok()?.modified().ok()?, path)))
+            .collect();
+        copies.sort_by_key(|(used_at, _)| std::cmp::Reverse(*used_at));
+        for (_, path) in copies.iter().skip(self.capacity) {
+            let _ = fs::remove_file(path);
+        }
     }
 
     /// Keeps `copy`, written beside its place and moved there, so a run reading the
@@ -692,6 +721,14 @@ impl SchemaUrlCopies {
         if kept.is_err() {
             let _ = fs::remove_file(&partial);
         }
+    }
+}
+
+/// Marks the copy at `copy_path` used now, its modified time being when it was
+/// last used.
+fn mark_used(copy_path: &Path) {
+    if let Ok(copy) = fs::File::options().write(true).open(copy_path) {
+        let _ = copy.set_modified(SystemTime::now());
     }
 }
 
@@ -960,6 +997,7 @@ mod tests {
 
     const SCHEMA: &str = r#"{"type": "object"}"#;
     const ETAG: &str = "\"mock-etag\"";
+    const MOCK_CAPACITY: usize = 8;
 
     const SILENT_SERVER_POLL: Duration = Duration::from_millis(5);
 
@@ -1185,8 +1223,12 @@ mod tests {
             scratch: &ScratchDirectory,
             credentials: GivenCredentials,
         ) -> SchemaUrlCopies {
-            let mut copies =
-                SchemaUrlCopies::with_credentials(&scratch.0, Box::new(credentials), &self.api);
+            let mut copies = SchemaUrlCopies::with_credentials(
+                &scratch.0,
+                MOCK_CAPACITY,
+                Box::new(credentials),
+                &self.api,
+            );
             copies.github_link_prefixes = vec![format!("{}/", self.api)];
             copies
         }
@@ -1454,6 +1496,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
         }
         let mut copies = SchemaUrlCopies::with_credentials(
             scratch.0.join("copies"),
+            MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
             GITHUB_API,
         );
@@ -1582,6 +1625,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
         let scratch = ScratchDirectory::new("max-age");
         let copies = SchemaUrlCopies::with_credentials(
             &scratch.0,
+            MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
             GITHUB_API,
         );
@@ -1597,6 +1641,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
         let scratch = ScratchDirectory::new("checked");
         let copies = SchemaUrlCopies::with_credentials(
             &scratch.0,
+            MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
             GITHUB_API,
         );
@@ -1611,6 +1656,7 @@ echo '{"ETag": "\"mock-s3-etag\""}'
         let scratch = ScratchDirectory::new("offline");
         let copies = SchemaUrlCopies::with_credentials(
             &scratch.0,
+            MOCK_CAPACITY,
             Box::new(GivenCredentials::default()),
             GITHUB_API,
         );
@@ -1627,5 +1673,43 @@ echo '{"ETag": "\"mock-s3-etag\""}'
             },
         );
         assert_eq!(copies.read(unanswered).unwrap().text, SCHEMA);
+    }
+
+    #[test]
+    fn the_least_recently_used_copies_beyond_the_capacity_are_dropped() {
+        let scratch = ScratchDirectory::new("capacity");
+        let copies = SchemaUrlCopies::with_credentials(
+            &scratch.0,
+            2,
+            Box::new(GivenCredentials::default()),
+            GITHUB_API,
+        );
+        let links = [
+            "https://mock.example/first.schema.json",
+            "https://mock.example/second.schema.json",
+            "https://mock.example/third.schema.json",
+        ];
+        for (order, link) in links.iter().enumerate() {
+            let copy_path = copies.copy_path(link);
+            copies.keep(
+                &copy_path,
+                &KeptCopy {
+                    url: (*link).to_owned(),
+                    etag: None,
+                    last_modified: None,
+                    confirmed_at: seconds_now(),
+                    body: SCHEMA.to_owned(),
+                },
+            );
+            let used_at = UNIX_EPOCH + Duration::from_secs(order as u64 + 1);
+            let copy = fs::File::options().write(true).open(&copy_path).unwrap();
+            copy.set_modified(used_at).unwrap();
+        }
+        let first = format!("{}?yaml_dsl_max_age_days=1", links[0]);
+        assert_eq!(copies.read(&first).unwrap().text, SCHEMA);
+        copies.drop_least_recently_used();
+        assert!(copies.copy_path(links[0]).exists());
+        assert!(!copies.copy_path(links[1]).exists());
+        assert!(copies.copy_path(links[2]).exists());
     }
 }

@@ -23,8 +23,11 @@ use crate::template_filling::check_fixed_roots;
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
 /// The `tfgen.yml` formats tfgen reads, by their `version`.
-const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0"];
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1"];
+/// The `tfgen.yml` format that has no `performance`.
+const UNTUNED_CONFIG_VERSION: &str = "1.0";
 const DEFAULT_DESCRIPTOR: &str = "stack.tg.hcl";
+pub const DEFAULT_SCHEMA_CACHE_CAPACITY: usize = 100;
 
 /// A config folder: every DSL its `yaml-dsl.yml` declares, and its `tfgen.yml`.
 pub struct LoadedConfig {
@@ -49,6 +52,8 @@ pub struct TfgenConfig {
     pub globals: Vec<(String, Node)>,
     pub generators: Vec<Generator>,
     pub stack_templates: Vec<(String, StackTemplate)>,
+    /// How many schema URL copies are kept, the least recently used dropped first.
+    pub schema_cache_capacity: usize,
 }
 
 pub struct Generator {
@@ -208,6 +213,14 @@ impl LoadedConfig {
             .find(|generator| generator.dsl_id == dsl_id)
     }
 
+    pub fn schema_cache_capacity(&self) -> usize {
+        self.tfgen
+            .as_ref()
+            .map_or(DEFAULT_SCHEMA_CACHE_CAPACITY, |tfgen| {
+                tfgen.schema_cache_capacity
+            })
+    }
+
     pub fn descriptor_names(&self) -> Vec<String> {
         match &self.tfgen {
             Some(tfgen) => tfgen.descriptor_names.clone(),
@@ -246,7 +259,23 @@ impl TfgenConfig {
     fn read(file: &Path, directory: &Path) -> Result<Self, Diagnostic> {
         let (root, source) = read_yaml_text(file)?;
         let mut config = MapReader::new(&root, "tfgen.yml")?;
-        config_version(config.required("version")?)?;
+        let version = config_version(config.required("version")?)?;
+        let performance = match version.as_str() {
+            UNTUNED_CONFIG_VERSION => None,
+            _ => config.optional("performance"),
+        };
+        let schema_cache_capacity = match performance {
+            Some(performance) => {
+                let mut performance = MapReader::new(performance, "`performance`")?;
+                let capacity = match performance.optional("schema_cache_capacity") {
+                    Some(capacity) => positive_whole_number(capacity, "`schema_cache_capacity`")?,
+                    None => DEFAULT_SCHEMA_CACHE_CAPACITY,
+                };
+                performance.finish()?;
+                capacity
+            }
+            None => DEFAULT_SCHEMA_CACHE_CAPACITY,
+        };
         let descriptor_names = match config.optional("stacks") {
             Some(stacks) => {
                 let mut stacks = MapReader::new(stacks, "`stacks`")?;
@@ -282,6 +311,7 @@ impl TfgenConfig {
             globals,
             generators,
             stack_templates,
+            schema_cache_capacity,
         })
     }
 }
@@ -467,11 +497,11 @@ impl StackTemplate {
     }
 }
 
-/// Checks `tfgen.yml`'s `version` names a format tfgen reads.
-fn config_version(node: &Node) -> Result<(), Diagnostic> {
+/// `tfgen.yml`'s `version`, where it names a format tfgen reads.
+fn config_version(node: &Node) -> Result<String, Diagnostic> {
     let version = text(node, "`version`")?;
     if TFGEN_CONFIG_VERSIONS.contains(&version.as_str()) {
-        return Ok(());
+        return Ok(version);
     }
     let versions: Vec<String> = TFGEN_CONFIG_VERSIONS
         .iter()
@@ -667,6 +697,21 @@ fn text(node: &Node, what: &str) -> Result<String, Diagnostic> {
     node.as_str()
         .map(str::to_owned)
         .ok_or_else(|| type_problem(node, what, "string"))
+}
+
+fn positive_whole_number(node: &Node, what: &str) -> Result<usize, Diagnostic> {
+    let whole = match &node.kind {
+        NodeKind::Number(number) => number.parse::<i64>().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| type_problem(node, what, "integer"))?;
+    usize::try_from(whole)
+        .ok()
+        .filter(|whole| *whole >= 1)
+        .ok_or_else(|| {
+            Diagnostic::at(&node.position, format!("{what} must be >= 1"))
+                .with_label(format!("is {whole}"))
+        })
 }
 
 fn texts(node: &Node, what: &str) -> Result<Vec<String>, Diagnostic> {

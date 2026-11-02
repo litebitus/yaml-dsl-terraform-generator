@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Schemas
+  - `tfgen.yml` 1.1 takes `performance.schema_cache_capacity`, the schema URL copies kept, the least recently used dropped first.
+
 ## v0.0.4 — 2026-11-01
 
 - Schemas

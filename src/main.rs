@@ -33,7 +33,9 @@ use terminal_size::{Height, Width, terminal_size_of};
 use yaml_dsl_spec::Diagnostic;
 
 use crate::command_line::{Request, USAGE, command_line};
-use crate::config_files::{DSL_CONFIG_FILE, LoadedConfigs};
+use crate::config_files::{
+    DEFAULT_SCHEMA_CACHE_CAPACITY, DSL_CONFIG_FILE, LoadedConfig, LoadedConfigs,
+};
 use crate::disk_source::DiskSource;
 use crate::error_report::{ReportStyle, Severity, SourceFiles, report};
 use crate::generated_files::{FileChange, write_stack_files};
@@ -190,7 +192,6 @@ fn run(
     };
     let source = Arc::new(DiskSource);
     let mut configs = LoadedConfigs::new();
-    let schema_urls = SchemaUrlCopies::new(schema_url_copies_directory());
     let candidates = if stack_arguments.is_empty() {
         repository_stacks(&root, &mut configs, &source)?
     } else {
@@ -202,6 +203,13 @@ fn run(
             &source,
         )?
     };
+    let schema_cache_capacity = configs
+        .values()
+        .filter_map(|config| config.as_ref().ok())
+        .map(LoadedConfig::schema_cache_capacity)
+        .max()
+        .unwrap_or(DEFAULT_SCHEMA_CACHE_CAPACITY);
+    let schema_urls = SchemaUrlCopies::new(schema_url_copies_directory(), schema_cache_capacity);
     let mut succeeded = true;
     for (directory, result) in &configs {
         if let Err(diagnostics) = result {
@@ -266,6 +274,7 @@ fn run(
         });
     }
     let results: Vec<_> = jobs.par_iter().map(generate_stack).collect();
+    schema_urls.drop_least_recently_used();
     let mut changed_stacks: Vec<(String, Vec<(String, FileChange)>)> = Vec::new();
     let mut compared = 0;
     for (job, result) in jobs.iter().zip(results) {
