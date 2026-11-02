@@ -244,6 +244,7 @@ mod tests {
             directory: folder.join("stack"),
             overlay: None,
             common_layer: None,
+            holds_no_documents: false,
         }
     }
 

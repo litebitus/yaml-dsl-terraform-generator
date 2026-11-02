@@ -118,6 +118,7 @@ The `tfgen` global is the stack's whole request of `tfgen`, a map so it can grow
 
 - A stack is `tfgen`'s when its globals hold `tfgen`.
 - A stack's documents are those the DSL's `file_includes` select in the stack's directory, and those its `imports` name, each with the common layer the DSL's `layers` give it.
+- A stack directory holding no document of a DSL is an overlay holding no documents where the YAML DSL standard says so, and compiles its common layer alone; its header and `__data_files__` name the common layer.
 
 ### Several DSLs
 
@@ -584,7 +585,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
 
 A run's cost grows with the stacks it compiles and never with the size of the repo:
 
-- `tfgen` never walks the repo. `--stack` reads the named stack's descriptor, its documents, the documents its `imports` name and the common layers its DSL's layers name. A run of every stack takes the stacks from git, `git ls-files --cached --others --exclude-standard`, so a stack counts before it is tracked and ignored paths are never entered.
+- `tfgen` never walks the repo. `--stack` reads the named stack's descriptor, its documents, the documents its `imports` name and the common layers its DSL's layers name; for a stack holding no document of a DSL, git lists the stack's sibling overlay directories. A run of every stack takes the stacks from git, `git ls-files --cached --others --exclude-standard`, so a stack counts before it is tracked and ignored paths are never entered.
 - A document is parsed once, however many stacks read it, and a schema is read and compiled once per run.
 - Stacks compile in parallel.
 

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use yaml_dsl_compiler::output::{BodyItem, OutputFile};
 use yaml_dsl_compiler::writer::write_file;
-use yaml_dsl_compiler::{BuiltinValues, ResolveOptions, ResolvedUnit, TargetLanguage, Unit};
+use yaml_dsl_compiler::{
+    BuiltinValues, Compiler, ResolveOptions, ResolvedUnit, TargetLanguage, Unit,
+};
 use yaml_dsl_spec::json_path::PathStep;
 use yaml_dsl_spec::resolved::{Declared, MapEntry, Value, ValueKind};
 use yaml_dsl_spec::{Diagnostic, Position};
@@ -104,10 +106,30 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
     let early_context = StackContext::new(stack_root.clone(), &tfgen.globals);
     let mut compiled = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut units = Vec::new();
     for (dsl, document) in &documents {
         let Some(generator) = job.config.generator(&dsl.id) else {
             continue;
         };
+        match document_unit(dsl, document) {
+            Ok(unit) => units.push((*dsl, generator, unit)),
+            Err(errors) => diagnostics.extend(errors),
+        }
+    }
+    for dsl in &job.config.dsls {
+        let Some(generator) = job.config.generator(&dsl.id) else {
+            continue;
+        };
+        if documents.iter().any(|(listed, _)| listed.id == dsl.id) {
+            continue;
+        }
+        let compiler = generated_compiler(dsl);
+        match compiler.overlays_holding_no_documents_at(&job.directory) {
+            Ok(found) => units.extend(found.into_iter().map(|unit| (dsl, generator, unit))),
+            Err(diagnostic) => diagnostics.push(diagnostic),
+        }
+    }
+    for (dsl, generator, unit) in &units {
         if compiled
             .iter()
             .any(|existing: &CompiledDocument<'_>| existing.generator.dsl_id == dsl.id)
@@ -121,7 +143,7 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
         let schema_override = job.schema_overrides.get(&dsl.id).map(String::as_str);
         let compiled_document = compile_document(
             dsl,
-            document,
+            unit,
             generator,
             &early_context,
             schema_override,
@@ -331,28 +353,17 @@ impl BuiltinValues for StackBuiltins {
     }
 }
 
-fn compile_document(
-    dsl: &DeclaredDsl,
-    document: &Path,
-    generator: &Generator,
-    context: &StackContext<'_>,
-    schema_override: Option<&str>,
-    schema_cache: &SchemaCache,
-    config_root: &Path,
-) -> Result<Option<ResolvedUnit>, Vec<Diagnostic>> {
-    let compiler = dsl
-        .generated
+/// The compiler of a DSL a generator compiles.
+fn generated_compiler(dsl: &DeclaredDsl) -> &Compiler {
+    dsl.generated
         .as_ref()
-        .expect("a DSL with a generator has its compiler");
-    let frame = RefFrame::of_stack(context);
-    let mut builtins = BTreeMap::new();
-    for (name, node) in &generator.builtin_values {
-        let value = evaluate_node(node, &frame).map_err(|diagnostic| vec![diagnostic])?;
-        if let Some(value) = value {
-            builtins.insert(name.clone(), value.local_value().kind.clone());
-        }
-    }
-    let unit = compiler
+        .expect("a DSL with a generator has its compiler")
+}
+
+/// The unit a stack's document compiles in: the document with the common layer it
+/// takes.
+fn document_unit(dsl: &DeclaredDsl, document: &Path) -> Result<Unit, Vec<Diagnostic>> {
+    generated_compiler(dsl)
         .unit_of(document)
         .map_err(|diagnostic| vec![diagnostic])?
         .ok_or_else(|| {
@@ -361,7 +372,27 @@ fn compile_document(
                 document.display(),
                 dsl.id
             ))]
-        })?;
+        })
+}
+
+fn compile_document(
+    dsl: &DeclaredDsl,
+    unit: &Unit,
+    generator: &Generator,
+    context: &StackContext<'_>,
+    schema_override: Option<&str>,
+    schema_cache: &SchemaCache,
+    config_root: &Path,
+) -> Result<Option<ResolvedUnit>, Vec<Diagnostic>> {
+    let compiler = generated_compiler(dsl);
+    let frame = RefFrame::of_stack(context);
+    let mut builtins = BTreeMap::new();
+    for (name, node) in &generator.builtin_values {
+        let value = evaluate_node(node, &frame).map_err(|diagnostic| vec![diagnostic])?;
+        if let Some(value) = value {
+            builtins.insert(name.clone(), value.local_value().kind.clone());
+        }
+    }
     let generator_schema = match &generator.schema {
         Some(node) => Some(schema_entries(node, &frame).map_err(|diagnostic| vec![diagnostic])?),
         None => None,
@@ -376,7 +407,7 @@ fn compile_document(
         builtins: Some(&StackBuiltins(builtins)),
         schema_provider: Some(&schemas),
     };
-    let resolved = compiler.resolve_with(&unit, &options)?;
+    let resolved = compiler.resolve_with(unit, &options)?;
     Ok((!resolved.fragment).then_some(resolved))
 }
 
@@ -413,7 +444,9 @@ fn data_files(compiled: &[CompiledDocument<'_>], directory: &Path) -> Vec<String
     let mut files = Vec::new();
     for document in compiled {
         let unit = &document.resolved.unit;
-        files.push(stack_relative(&unit.file, directory));
+        if !unit.holds_no_documents {
+            files.push(stack_relative(&unit.file, directory));
+        }
         if let Some(common_layer) = &unit.common_layer {
             files.push(stack_relative(common_layer, directory));
         }
@@ -552,10 +585,13 @@ fn generator_file(
     parts.sort_by(|first, second| first.order.cmp(&second.order));
     let mut body: Vec<BodyItem> = parts.into_iter().flat_map(|part| part.items).collect();
     body.extend(once_items);
-    let mut sources = vec![relative_slash_path(
-        &resolved.unit.file,
-        job.repository_root,
-    )];
+    let mut sources = Vec::new();
+    if !resolved.unit.holds_no_documents {
+        sources.push(relative_slash_path(
+            &resolved.unit.file,
+            job.repository_root,
+        ));
+    }
     if let Some(common_layer) = &resolved.unit.common_layer {
         sources.push(relative_slash_path(common_layer, job.repository_root));
     }
