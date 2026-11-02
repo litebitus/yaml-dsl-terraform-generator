@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.6 — 2026-11-02
+
 - Generation
   - A stack directory holding no document of a DSL compiles its common layer alone, as an overlay holding no documents, through yaml-dsl-compiler 0.1.5.
 
