@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.5 — 2026-11-02
+
 - Generation
   - Writes HCL indented as `terraform fmt` indents it, through yaml-dsl-compiler 0.1.3.
 - Schemas
