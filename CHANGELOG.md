@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Schemas
+  - `schemas/yaml-dsl.yml` defines `tfgen.yml` as a YAML DSL, for a repo's `yaml-dsl.yml` to copy.
+  - `tfgen.yml` 1.3's schema publishes `fn.format` in its `x-yaml-dsl-functions` table.
+
 ## v0.0.7 — 2026-11-06
 
 - Schemas

@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/litebitus/yaml-dsl-terraform-generator/schemas/tfgen-v1.3.schema.json",
+  "title": "tfgen.yml v1.3",
+  "description": "What a config folder's YAML DSLs compile to: the globals, the templates a stack takes, and a generator per DSL.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "enum": ["1", "1.0", "1.1", "1.2", "1.3"],
+      "description": "Config format version: `1.0`, `1.1`, `1.2` or `1.3`, or `1` for the newest 1.x tfgen knows."
+    },
+    "stacks": {
+      "type": "object",
+      "description": "How a stack is found.",
+      "additionalProperties": false,
+      "properties": {
+        "descriptors": {
+          "type": "array",
+          "default": ["stack.tg.hcl"],
+          "description": "File names a stack's descriptor may have.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "globals": {
+      "type": "object",
+      "description": "Values every stack reads as `tfgen.<name>`, with refs; a key `<name> fn.format*` computes one."
+    },
+    "generators": {
+      "type": "object",
+      "description": "A generator per DSL, by the DSL's `id` in `yaml-dsl.yml`.",
+      "additionalProperties": { "$ref": "#/$defs/generator" }
+    },
+    "templates": {
+      "type": "object",
+      "description": "Templates a stack takes by name, in its `tfgen.templates`.",
+      "additionalProperties": { "$ref": "#/$defs/stack_template" }
+    },
+    "performance": {
+      "type": "object",
+      "description": "How a run uses the machine.",
+      "additionalProperties": false,
+      "properties": {
+        "schema_cache_capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100,
+          "description": "How many schemas the schema cache keeps; the least recently used is dropped first."
+        }
+      }
+    }
+  },
+  "x-yaml-dsl-functions": {
+    "format": {
+      "description": "Fills the layout's verbs with the operands, in order: Go's printing verbs, and `%u` upper-cased, `%l` lower-cased, `%A` with each `/` as `_`, `%B` whole where it fits the precision, else `-` and its last characters, one fewer than the precision.",
+      "arguments": [
+        { "name": "layout", "type": "text", "required": true, "repeated": false, "description": "The text holding the verbs." },
+        { "name": "operands", "type": "any", "required": false, "repeated": true, "description": "The values the verbs write, in order." }
+      ],
+      "return": { "type": "text", "description": "The layout with each verb filled." }
+    }
+  },
+  "$defs": {
+    "generator": {
+      "type": "object",
+      "required": ["written_to"],
+      "additionalProperties": false,
+      "properties": {
+        "written_to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The generated file, in the stack's directory."
+        },
+        "schema": {
+          "type": "array",
+          "description": "Where a document's schema is when its modeline names none on disk: paths, path patterns and URLs, with refs, the first found taken.",
+          "items": {
+            "anyOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/$defs/call" }
+            ]
+          }
+        },
+        "builtin_values": {
+          "type": "object",
+          "description": "The value each builtin of the DSL's scopes takes for a stack, with refs."
+        },
+        "data_files": {
+          "type": "array",
+          "description": "JSONPaths of fields whose values name files the stack reads.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "values": {
+          "type": "object",
+          "description": "Values computed once per stack, read as `values.<name>`.",
+          "additionalProperties": { "$ref": "#/$defs/value_rule" }
+        },
+        "blocks": {
+          "type": "array",
+          "description": "Templates written for the parts of the folded document each selects, in the document's order.",
+          "items": { "$ref": "#/$defs/block" }
+        },
+        "references": {
+          "type": "array",
+          "description": "How a reference of the DSL is written, the first rule matching taken.",
+          "items": { "$ref": "#/$defs/reference" }
+        }
+      }
+    },
+    "value_rule": {
+      "type": "object",
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "description": "The value, with refs; with `each`, the value of each part selected; with `first`, the value of the declaration selected."
+        },
+        "default": {
+          "description": "The value where `value` reads an absent key, or where `first` selects no declaration. Not with `each`."
+        },
+        "each": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A JSONPath into the folded document; the value is a list, one item per part selected."
+        },
+        "where": {
+          "type": "object",
+          "description": "Fields a selected part must hold, each equal to its value. With `each`."
+        },
+        "defaults": {
+          "type": "object",
+          "description": "Fields a selected part takes where it holds none. With `each`."
+        },
+        "first": {
+          "const": "declaration",
+          "description": "Selects the first declaration of `scope`, in the document's order, read as `each` in `value`."
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The scope whose declarations `first` selects. With `first`."
+        },
+        "scope_keys": {
+          "type": "array",
+          "description": "Only the declarations under these scope keys. With `first`.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "dependentRequired": {
+        "where": ["each"],
+        "defaults": ["each"],
+        "first": ["scope"],
+        "scope": ["first"],
+        "scope_keys": ["first"]
+      },
+      "allOf": [
+        {
+          "if": { "required": ["each"] },
+          "then": { "not": { "required": ["default"] } }
+        },
+        {
+          "if": { "required": ["first"] },
+          "then": { "not": { "required": ["each"] } }
+        }
+      ]
+    },
+    "block": {
+      "type": "object",
+      "required": ["template"],
+      "additionalProperties": false,
+      "properties": {
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The template file, relative to the config folder."
+        },
+        "each": {
+          "enum": ["declaration", "scope_key", "entry"],
+          "description": "What the template is written once for, read as `each`. Absent, it is written once per stack."
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The scope whose declarations are selected. With `each: declaration` or `each: scope_key`."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A JSONPath into the folded document. With `each: entry`."
+        },
+        "scope_keys": {
+          "type": "array",
+          "description": "Only the declarations under these scope keys.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "scope_keys_except": {
+          "type": "array",
+          "description": "Every declaration except those under these scope keys.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "value_matches": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A regular expression the selected value's text, or a reference as written, must match."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["each"],
+            "properties": { "each": { "enum": ["declaration", "scope_key"] } }
+          },
+          "then": { "required": ["scope"], "not": { "required": ["path"] } }
+        },
+        {
+          "if": {
+            "required": ["each"],
+            "properties": { "each": { "const": "entry" } }
+          },
+          "then": { "required": ["path"], "not": { "required": ["scope"] } }
+        },
+        {
+          "if": { "not": { "required": ["each"] } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["scope"] },
+                { "required": ["path"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "required": ["scope", "template"],
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The scope of the references the rule writes."
+        },
+        "scope_keys": {
+          "type": "array",
+          "description": "Only references under these scope keys.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "path_matches": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A regular expression the reference's path after its name must match."
+        },
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The HCL expression written for the reference, reading `reference.scope_key`, `reference.name` and `reference.path`."
+        }
+      }
+    },
+    "stack_template": {
+      "type": "object",
+      "required": ["file", "written_to"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The template file, relative to the config folder."
+        },
+        "written_to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The generated file, in the stack's directory."
+        },
+        "required_providers": {
+          "type": "object",
+          "description": "The providers the template requires, each by its source, written into `stack.__required_providers__`.",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "call": {
+      "type": "object",
+      "description": "A function call whose result is the value, such as `fn.format*: [layout, operands...]`.",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "propertyNames": { "pattern": "^fn\\.[a-z_]+\\*?$" }
+    }
+  }
+}

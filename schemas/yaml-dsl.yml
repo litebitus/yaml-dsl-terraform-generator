@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://github.com/litebitus/yaml-dsl-spec/releases/latest/download/yaml-dsl-v1.schema.json
+version: "1"
+dsls:
+  - id: tfgen.yml
+    file_includes: ["**/tfgen.yml"]
+    file_excludes: []
+    schema_search_paths:
+      - https://github.com/litebitus/yaml-dsl-terraform-generator/releases/latest/download/tfgen-v1.schema.json
+    placeholder:
+      pattern: "\\{\\{(?<body>[^{}\\n]*)\\}\\}"
+      unscanned_paths: []
+    function:
+      definitions: [schema]
+      call_result_reference_positions: [whole_placeholder, placeholder_in_text]
+      calls_not_allowed_at: []
+      marker_function:
+        call_marker: fn.
+        splat_operator: "*"
+        calls_without_name_allowed: true
+    key_sort_orders: []
+    scopes:
+      ROOT:
+        regions: ["$"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: [each, fold, stack, tfgen]
+      REFERENCE:
+        regions: ["$.generators.*.references"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: [reference.name, reference.path, reference.scope_key]
+      tfgen:
+        regions: ["$"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: []
+      values:
+        regions: ["$.generators.*"]
+        later_items_of_declaring_list: false
+        named_by_parent_key: false
+        builtin_names: []
+    declarations:
+      - path: "$.globals.*"
+        skip_keys: []
+        exclude_candidates: []
+        name_source: key
+        key_token: first_word
+        name_spelling: as_written
+        meta_argument_name: null
+        declares_every_name: false
+        scope_name: tfgen
+      - path: "$.generators.*.values.*"
+        skip_keys: []
+        exclude_candidates: []
+        name_source: key
+        key_token: first_word
+        name_spelling: as_written
+        meta_argument_name: null
+        declares_every_name: false
+        scope_name: values
+    references:
+      - pattern: "^tfgen\\.(?<name>[a-z_][a-z0-9_]*)"
+        positions: [whole_placeholder, placeholder_in_text]
+        text_after_name_allowed: true
+        scope_name: tfgen
+        scope_group: null
+        name_group: name
+      - pattern: "^values\\.(?<name>[a-z_][a-z0-9_]*)"
+        positions: [whole_placeholder, placeholder_in_text]
+        text_after_name_allowed: true
+        scope_name: values
+        scope_group: null
+        name_group: name
+      - pattern: "^(?<name>reference\\.[a-z0-9_]+)$"
+        positions: [whole_placeholder, placeholder_in_text]
+        text_after_name_allowed: false
+        scope_name: REFERENCE
+        scope_group: null
+        name_group: name
+      - pattern: "^(?<name>each|fold|stack|tfgen)\\b"
+        positions: [whole_placeholder, placeholder_in_text]
+        text_after_name_allowed: true
+        scope_name: ROOT
+        scope_group: null
+        name_group: name

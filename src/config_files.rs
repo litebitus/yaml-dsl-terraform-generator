@@ -23,7 +23,7 @@ use crate::template_filling::check_fixed_roots;
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
 /// The `tfgen.yml` formats tfgen reads, by their `version`.
-const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1", "1.2"];
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1", "1.2", "1.3"];
 /// The `tfgen.yml` format that has no `performance`.
 const UNTUNED_CONFIG_VERSION: &str = "1.0";
 /// The `tfgen.yml` formats whose `values` have no `first`.

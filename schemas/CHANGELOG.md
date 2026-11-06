@@ -2,6 +2,10 @@
 
 Each version is the format a `tfgen.yml` names in its `version`, and the schema file of that name. A version not yet released is headed `## <version> — unreleased`; the release workflow stamps it with the tfgen release that ships it and the date.
 
+## 1.3 — unreleased
+
+- The schema publishes `fn.format` in its `x-yaml-dsl-functions` table, for the YAML DSL editor to check its calls.
+
 ## 1.2 — tfgen v0.0.7, 2026-11-06
 
 - A value takes `first: declaration`: its `value` written for the first declaration of `scope` under `scope_keys`, in the document's order, read as `each`, else its `default`.

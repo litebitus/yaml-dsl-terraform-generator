@@ -25,7 +25,7 @@ A YAML DSL over Terraform. A stack's author writes documents in the organization
 | `tfgen.yml` | globals, the templates a stack takes, and a generator per DSL |
 | `stack.tg.hcl` | a stack's own values, in its `globals` |
 
-`tfgen.yml`'s JSON Schemas are in [schemas/](schemas), one per format version, each field described there.
+`tfgen.yml`'s JSON Schemas are in [schemas/](schemas), one per format version, each field described there. [schemas/yaml-dsl.yml](schemas/yaml-dsl.yml) defines `tfgen.yml` as a YAML DSL: copied into a repo's `yaml-dsl.yml`, it lets the [YAML DSL editor](https://github.com/litebitus/vscode-yaml-dsl-editor) check a `tfgen.yml`'s refs as it is written.
 
 ## Usage
 

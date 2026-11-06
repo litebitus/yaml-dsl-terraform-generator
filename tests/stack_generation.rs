@@ -654,11 +654,13 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
     assert!(
-        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`"),
+        errors.contains(
+            "`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`"
+        ),
         "{errors}"
     );
     assert!(
-        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`"),
+        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`"),
         "{errors}"
     );
 }
@@ -831,7 +833,7 @@ fn each_example_generates_the_files_it_commits() {
 fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let schema: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(manifest.join("schemas/tfgen-v1.2.schema.json")).unwrap(),
+        &fs::read_to_string(manifest.join("schemas/tfgen-v1.3.schema.json")).unwrap(),
     )
     .unwrap();
     let validator = jsonschema::draft202012::new(&schema).unwrap();
