@@ -23,9 +23,11 @@ use crate::template_filling::check_fixed_roots;
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
 /// The `tfgen.yml` formats tfgen reads, by their `version`.
-const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1"];
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1", "1.2"];
 /// The `tfgen.yml` format that has no `performance`.
 const UNTUNED_CONFIG_VERSION: &str = "1.0";
+/// The `tfgen.yml` formats whose `values` have no `first`.
+const FIRSTLESS_CONFIG_VERSIONS: &[&str] = &["1.0", "1.1"];
 const DEFAULT_DESCRIPTOR: &str = "stack.tg.hcl";
 pub const DEFAULT_SCHEMA_CACHE_CAPACITY: usize = 100;
 
@@ -80,6 +82,12 @@ pub enum ValueRule {
         where_fields: Vec<(String, Node)>,
         defaults: Option<Node>,
         value: Node,
+    },
+    First {
+        scope: String,
+        scope_keys: Option<Vec<String>>,
+        value: Node,
+        default: Option<Node>,
     },
 }
 
@@ -295,7 +303,7 @@ impl TfgenConfig {
         let mut generators = Vec::new();
         if let Some(listed) = config.optional("generators") {
             for entry in entries(listed, "`generators`")? {
-                generators.push(Generator::read(entry, directory, &source)?);
+                generators.push(Generator::read(entry, directory, &source, &version)?);
             }
         }
         let mut stack_templates = Vec::new();
@@ -317,7 +325,12 @@ impl TfgenConfig {
 }
 
 impl Generator {
-    fn read(entry: &Entry, directory: &Path, source: &str) -> Result<Self, Diagnostic> {
+    fn read(
+        entry: &Entry,
+        directory: &Path,
+        source: &str,
+        version: &str,
+    ) -> Result<Self, Diagnostic> {
         let what = format!("generator `{}`", entry.key);
         let mut generator = MapReader::new(&entry.value, &what)?;
         let written_to = text(generator.required("written_to")?, "`written_to`")?;
@@ -339,7 +352,11 @@ impl Generator {
         let mut values = Vec::new();
         if let Some(listed) = generator.optional("values") {
             for entry in entries(listed, "`values`")? {
-                values.push((entry.key.clone(), ValueRule::read(&entry.value)?));
+                let takes_first = !FIRSTLESS_CONFIG_VERSIONS.contains(&version);
+                values.push((
+                    entry.key.clone(),
+                    ValueRule::read(&entry.value, takes_first)?,
+                ));
             }
         }
         let mut blocks = Vec::new();
@@ -370,10 +387,42 @@ impl Generator {
 }
 
 impl ValueRule {
-    fn read(node: &Node) -> Result<Self, Diagnostic> {
+    fn read(node: &Node, takes_first: bool) -> Result<Self, Diagnostic> {
         let mut rule = MapReader::new(node, "a value")?;
-        let value_rule = match rule.optional("each") {
-            Some(each) => {
+        let first = if takes_first {
+            rule.optional("first")
+        } else {
+            None
+        };
+        let value_rule = match (first, rule.optional("each")) {
+            (Some(first), None) => {
+                let selected = FixedRoot::DeclarationEach
+                    .block_each_kind()
+                    .unwrap_or_default();
+                if text(first, "`first`")? != selected {
+                    return Err(Diagnostic::at(
+                        &first.position,
+                        format!("`first` must be `{selected}`"),
+                    )
+                    .with_label(format!("`first` is `{selected}`")));
+                }
+                ValueRule::First {
+                    scope: text(rule.required("scope")?, "`scope`")?,
+                    scope_keys: match rule.optional("scope_keys") {
+                        Some(keys) => Some(texts(keys, "`scope_keys`")?),
+                        None => None,
+                    },
+                    value: rule.required("value")?.clone(),
+                    default: rule.optional("default").cloned(),
+                }
+            }
+            (Some(first), Some(_)) => {
+                return Err(Diagnostic::at(
+                    &first.position,
+                    "`first` and `each` are two forms of a value; state one",
+                ));
+            }
+            (None, Some(each)) => {
                 let where_fields = match rule.optional("where") {
                     Some(fields) => entries(fields, "`where`")?
                         .iter()
@@ -388,7 +437,7 @@ impl ValueRule {
                     value: rule.required("value")?.clone(),
                 }
             }
-            None => ValueRule::Single {
+            (None, None) => ValueRule::Single {
                 value: rule.required("value")?.clone(),
                 default: rule.optional("default").cloned(),
             },

@@ -155,8 +155,9 @@ fn call_value(call: &CallKey, node: &Node, frame: &RefFrame<'_>) -> Result<Value
     Ok(Value::string(formatted, node.position.clone()))
 }
 
-/// A generator's value: a value or its default, or a list built from the entries
-/// a JSONPath selects in the folded document.
+/// A generator's value: a value or its default, a list built from the entries a
+/// JSONPath selects in the folded document, or the value written for the first
+/// declaration of a scope, else its default.
 pub fn evaluate_value_rule(rule: &ValueRule, frame: &RefFrame<'_>) -> Result<Value, Diagnostic> {
     match rule {
         ValueRule::Single { value, default } => {
@@ -197,6 +198,44 @@ pub fn evaluate_value_rule(rule: &ValueRule, frame: &RefFrame<'_>) -> Result<Val
                 ValueKind::List(computed),
                 value.position.clone(),
             ))
+        }
+        ValueRule::First {
+            scope,
+            scope_keys,
+            value,
+            default,
+        } => {
+            let declarations = &frame
+                .generator
+                .ok_or_else(|| Diagnostic::at(&value.position, "`first` reads the declarations"))?
+                .declarations;
+            let first = declarations.iter().find(|declaration| {
+                declaration.scope == *scope
+                    && scope_keys.as_ref().is_none_or(|keys| {
+                        declaration
+                            .scope_key
+                            .as_ref()
+                            .is_some_and(|scope_key| keys.contains(scope_key))
+                    })
+            });
+            if let Some(declaration) = first {
+                return evaluate_node(value, &frame.with_each(&declaration.each))?.ok_or_else(
+                    || {
+                        Diagnostic::at(
+                            &value.position,
+                            "the value is absent for the first declaration",
+                        )
+                    },
+                );
+            }
+            let default = default.as_ref().ok_or_else(|| {
+                Diagnostic::at(
+                    &value.position,
+                    "`first` selects no declaration and has no `default`",
+                )
+            })?;
+            evaluate_node(default, frame)?
+                .ok_or_else(|| Diagnostic::at(&default.position, "the default is absent"))
         }
     }
 }

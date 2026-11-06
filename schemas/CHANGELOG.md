@@ -1,0 +1,15 @@
+# `tfgen.yml` schema changelog
+
+Each version is the format a `tfgen.yml` names in its `version`, and the schema file of that name. A version not yet released is headed `## <version> — unreleased`; the release workflow stamps it with the tfgen release that ships it and the date.
+
+## 1.2 — unreleased
+
+- A value takes `first: declaration`: its `value` written for the first declaration of `scope` under `scope_keys`, in the document's order, read as `each`, else its `default`.
+
+## 1.1 — tfgen v0.0.5, 2026-11-02
+
+- `performance.schema_cache_capacity`: how many schemas the schema cache keeps, the least recently used dropped first.
+
+## 1.0 — tfgen v0.0.1, 2026-11-01
+
+- The first format: `stacks`, `globals`, `generators` and `templates`.

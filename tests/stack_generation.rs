@@ -654,11 +654,11 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
     assert!(
-        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`"),
+        errors.contains("`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`"),
         "{errors}"
     );
     assert!(
-        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`"),
+        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`"),
         "{errors}"
     );
 }
@@ -753,6 +753,63 @@ fn a_config_naming_its_minor_version_is_read() {
 }
 
 #[test]
+fn a_first_value_is_written_for_the_first_declaration_of_its_scope_else_its_default() {
+    let workspace = MockWorkspace::new("first-value");
+    one_module_workspace(&workspace);
+    let first_values = concat!(
+        "    values:\n",
+        "      first_queue:\n",
+        "        first: declaration\n",
+        "        scope: ENTRY\n",
+        "        scope_keys: [queue]\n",
+        "        value: \"{{each.value.name}}\"\n",
+        "      first_topic:\n",
+        "        first: declaration\n",
+        "        scope: ENTRY\n",
+        "        scope_keys: [topic]\n",
+        "        value: \"{{each.value.name}}\"\n",
+        "        default: mock-no-topic\n",
+    );
+    let config = ONE_MODULE_CONFIG.replacen("    values:\n", first_values, 1);
+    workspace.write("tfgen.yml", &config);
+    workspace.write(
+        "templates/stack_facts.hcl",
+        concat!(
+            "locals {\n",
+            "  first_queue = \"{{values.first_queue}}\"\n",
+            "  first_topic = \"{{values.first_topic}}\"\n",
+            "}\n",
+        ),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let main = workspace.read("stacks/dev/main.tf");
+    assert!(main.contains("first_queue = \"mock-orders\""), "{main}");
+    assert!(main.contains("first_topic = \"mock-no-topic\""), "{main}");
+
+    let without_default = config.replacen("        default: mock-no-topic\n", "", 1);
+    workspace.write("tfgen.yml", &without_default);
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("`first` selects no declaration and has no `default`"),
+        "{errors}"
+    );
+
+    let format_1_1 = config.replacen("version: \"1\"", "version: \"1.1\"", 1);
+    workspace.write("tfgen.yml", &format_1_1);
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("`first`"), "{errors}");
+}
+
+#[test]
 fn each_example_generates_the_files_it_commits() {
     let workspace = MockWorkspace::new("examples");
     for example in EXAMPLES {
@@ -774,7 +831,7 @@ fn each_example_generates_the_files_it_commits() {
 fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let schema: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(manifest.join("schemas/tfgen-v1.1.schema.json")).unwrap(),
+        &fs::read_to_string(manifest.join("schemas/tfgen-v1.2.schema.json")).unwrap(),
     )
     .unwrap();
     let validator = jsonschema::draft202012::new(&schema).unwrap();

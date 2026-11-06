@@ -117,11 +117,21 @@ pub struct StackContext<'c> {
 }
 
 /// A generator's roots for one stack: `fold`, the stack's folded document, and
-/// `values`, computed once, when first read.
+/// `values`, computed once, when first read, from the document and its
+/// declarations.
 pub struct GeneratorContext<'c> {
     pub fold: Value,
+    pub declarations: Vec<SelectableDeclaration>,
     value_rules: &'c [(String, ValueRule)],
     computed_values: LazyTable,
+}
+
+/// A declaration as a value selects it, in the document's order: its scope, its
+/// scope key, and what a template reads as `each` for it.
+pub struct SelectableDeclaration {
+    pub scope: String,
+    pub scope_key: Option<String>,
+    pub each: Value,
 }
 
 /// The roots one ref can read where it stands.
@@ -198,9 +208,14 @@ impl<'c> StackContext<'c> {
 }
 
 impl<'c> GeneratorContext<'c> {
-    pub fn new(fold: Value, value_rules: &'c [(String, ValueRule)]) -> Self {
+    pub fn new(
+        fold: Value,
+        declarations: Vec<SelectableDeclaration>,
+        value_rules: &'c [(String, ValueRule)],
+    ) -> Self {
         Self {
             fold,
+            declarations,
             value_rules,
             computed_values: LazyTable::default(),
         }

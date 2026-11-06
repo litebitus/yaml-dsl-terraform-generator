@@ -83,7 +83,7 @@ jobs:
             echo "tag $NEXT already exists on origin" >&2
             exit 1
           fi
-          awk '/^## Unreleased$/ { inside = 1; next } /^## / { inside = 0 } inside && NF { found = 1 } END { exit !found }' CHANGELOG.md ||
+          awk 'tolower($0) == "## unreleased" { inside = 1; next } /^## / { inside = 0 } inside && NF { found = 1 } END { exit !found }' CHANGELOG.md ||
             { echo "CHANGELOG.md has nothing under '## Unreleased' to release as $NEXT" >&2; exit 1; }
           unpublished="$(cargo metadata --format-version 1 --locked | jq -r '
             .workspace_members as $members
@@ -122,20 +122,21 @@ jobs:
           cargo install cargo-zigbuild --locked --version 0.24.0
           rustup target add aarch64-apple-darwin aarch64-unknown-linux-gnu x86_64-apple-darwin x86_64-unknown-linux-gnu
 
-      - name: Stamp the changelog and the version, tag and push
+      - name: Stamp the changelogs and the version, tag and push
         if: ${{ !inputs.dry_run }}
         env:
           NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
-          awk '/^## Unreleased$/ { inside = 1; next } /^## / { inside = 0 } inside' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          awk 'tolower($0) == "## unreleased" { inside = 1; next } /^## / { inside = 0 } inside' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
           export RELEASE_DATE="$(date -u +%Y-%m-%d)" VERSION_NUMBER="${NEXT#v}"
-          perl -pi -e 's/^## Unreleased$/## Unreleased\n\n## $ENV{NEXT} — $ENV{RELEASE_DATE}/' CHANGELOG.md
+          perl -pi -e 's/^## Unreleased$/$&\n\n## $ENV{NEXT} — $ENV{RELEASE_DATE}/i' CHANGELOG.md
+          perl -pi -e 's/^## (\d+\.\d+) — unreleased$/## $1 — tfgen $ENV{NEXT}, $ENV{RELEASE_DATE}/i' schemas/CHANGELOG.md
           perl -pi -e '$stamped ||= s/^version = ".*"$/version = "$ENV{VERSION_NUMBER}"/' Cargo.toml
           cargo update --workspace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md Cargo.toml Cargo.lock
+          git add CHANGELOG.md schemas/CHANGELOG.md Cargo.toml Cargo.lock
           git commit -m "docs(changelog): ${NEXT}"
           git tag -a "$NEXT" -m "Release $NEXT"
           git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "$NEXT"

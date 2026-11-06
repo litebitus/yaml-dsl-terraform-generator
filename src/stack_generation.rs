@@ -18,7 +18,9 @@ use crate::config_files::{
 };
 use crate::error_report::did_you_mean;
 use crate::generated_files::header_comment;
-use crate::ref_scope::{FixedRoot, GeneratorContext, RefFrame, StackContext};
+use crate::ref_scope::{
+    FixedRoot, GeneratorContext, RefFrame, SelectableDeclaration, StackContext,
+};
 use crate::schema_cache::SchemaCache;
 use crate::schema_lookup::{SchemaSource, StackSchemas};
 use crate::schema_overrides::SchemaOverrides;
@@ -537,7 +539,11 @@ fn generator_file(
 ) -> Result<OutputFile, Vec<Diagnostic>> {
     let generator = document.generator;
     let resolved = &document.resolved;
-    let generator_context = GeneratorContext::new(resolved.document.clone(), &generator.values);
+    let generator_context = GeneratorContext::new(
+        resolved.document.clone(),
+        selectable_declarations(resolved),
+        &generator.values,
+    );
     let frame = RefFrame {
         stack: context,
         generator: Some(&generator_context),
@@ -678,6 +684,20 @@ fn selected_parts(
             })
             .collect(),
     }))
+}
+
+/// The stack's declarations, in the document's order, as a value selects them.
+fn selectable_declarations(resolved: &ResolvedUnit) -> Vec<SelectableDeclaration> {
+    let mut declarations: Vec<&Declared> = resolved.declarations.iter().collect();
+    declarations.sort_by_key(|declared| document_order(&resolved.document, &declared.path));
+    declarations
+        .into_iter()
+        .map(|declared| SelectableDeclaration {
+            scope: declared.scope.clone(),
+            scope_key: declared.scope_key.clone(),
+            each: declaration_value(declared),
+        })
+        .collect()
 }
 
 fn declaration_value(declared: &Declared) -> Value {

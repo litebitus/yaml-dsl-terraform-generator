@@ -346,14 +346,23 @@ values:
     where: { type: remote_state }
     defaults: { repo: mock-infra }
     value: { path: "{{each.stack_path}}", repo: "{{each.repo}}" }
+  stack_queue:
+    first: declaration
+    scope: RESOURCE
+    scope_keys: [queue]
+    value: "{{each.value.name}}"
+    default: ""
 ```
 
 | Form | Gives |
 |---|---|
 | `value`, `default` | the value, or the default where the value's optional path is absent |
 | `each`, `where`, `defaults`, `value` | a list: for every entry the JSONPath `each` selects whose fields equal `where`, `value` with the entry under `defaults` |
+| `first: declaration`, `scope`, `scope_keys`, `value`, `default` | `value` written for the first declaration of `scope` under `scope_keys`, in the document's order, read as `each` as a block's declaration is; the default where there is none |
 
 For a stack with no `cloud` block and two lookups, one of `type: remote_state` naming no `repo`, these are `["mock-region-1"]` and `[{ path = "network/dev", repo = "mock-infra" }]`.
+
+A declaration carries the fields its key gives it, which the folded document does not: a key `name mock-orders` is the field `name: mock-orders` of its declaration, read as `each.value.name`.
 
 ### Template roots
 
