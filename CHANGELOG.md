@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.9 — 2026-11-06
+
 - Generation
   - The schema `--schema` or `TFGEN_SCHEMA` names has its refs filled for each stack, as the generator's `schema` list does.
 
