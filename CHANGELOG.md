@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.7 — 2026-11-06
+
 - Schemas
   - `tfgen.yml` 1.2 takes a `first: declaration` value: its `value` written for the first declaration of a scope, else its `default`.
 
