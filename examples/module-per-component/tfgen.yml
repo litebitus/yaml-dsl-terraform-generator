@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://github.com/litebitus/yaml-dsl-terraform-generator/releases/latest/download/tfgen-v1.schema.json
 version: "1"
 
 globals:
