@@ -256,7 +256,7 @@ output "orders_url" {
 
 `tfgen` finds and reads every document's schema and hands it to the compiler, which is pure code and reads none itself. A document is compiled against the schema the editor reads for it, found in this order:
 
-1. the schema named for the run, by `--schema` or `TFGEN_SCHEMA`, for working on a schema locally;
+1. the schema named for the run, by `--schema` or `TFGEN_SCHEMA`, with refs filled for the stack, for working on a schema locally or reading one a run's environment reaches;
 2. its modeline, when the path it names is on disk, or when it names a URL;
 3. the generator's `schema`, a list in `schema_search_paths`' grammar with refs filled for the stack, the first entry found taken;
 4. the DSL's `schema_search_paths`, for a generator with no `schema`.
@@ -586,7 +586,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
 - A template's refs to `each` and `reference` are checked when the config is read: each root is read only in the templates filled with it, and only for its fields.
 - A report's lines divide to the terminal's width as the devops SDK lays a record out: nothing is cut, a line divides where the Unicode line breaking rules allow and after a machine string's separator, never inside a comparison, what wraps continues one level in, and where a row has no room its indentation gives first. A wrapped source line is underlined once, under the row the wrong text ends on, and a label that does not fit beside the underline takes its own rows under it. Output that is not a terminal is never divided.
 - Color is on where the output is a terminal and `NO_COLOR` is unset; `--color` and `--no-color` decide it.
-- `--schema` and `TFGEN_SCHEMA` name, by DSL id, the schema the run reads that DSL's documents against, ahead of their modelines; a flag wins over the variable for the DSL it names, and a path is read from the working directory. A document's modeline is never changed for it.
+- `--schema` and `TFGEN_SCHEMA` name, by DSL id, the schema the run reads that DSL's documents against, ahead of their modelines, its refs filled for each stack, as `{{stack.modules_version}}`; a flag wins over the variable for the DSL it names, and a path is read from the working directory. A document's modeline is never changed for it.
 - A generated file a stack no longer produces is deleted, so a stack's files always match its documents. Only a file carrying `tfgen`'s header, in a stack the run generates, is ever deleted.
 - Completion is the binary's: a script calls `tfgen __complete` with the words typed so far, and offers what it answers. What is typed is matched anywhere in a candidate, and in zsh in each part split at `:` or `/`. `--stack` completes to the repo's stacks whose globals hold `tfgen`, relative to the working directory. `--schema` completes to `<dsl id>=` for each DSL a generator compiles, then to the files and folders of the path typed after the `=`.
 

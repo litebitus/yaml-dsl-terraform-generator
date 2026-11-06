@@ -586,6 +586,33 @@ fn a_schema_named_for_the_run_goes_ahead_of_the_modeline() {
 }
 
 #[test]
+fn a_schema_named_for_the_run_has_its_refs_filled_for_each_stack() {
+    let workspace = MockWorkspace::new("schema-override-refs");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "local/1.2.3/mock.schema.json",
+        r#"{"type": "object", "required": ["mock_changed"]}"#,
+    );
+    let flagged = workspace.run(&[
+        "--no-color",
+        "--schema",
+        "mock-dsl=local/{{stack.modules_version}}/mock.schema.json",
+    ]);
+    let errors = String::from_utf8_lossy(&flagged.stderr);
+    assert!(errors.contains("`mock_changed` is required"), "{errors}");
+    let unknown = workspace.run(&[
+        "--no-color",
+        "--schema",
+        "mock-dsl=local/{{stack.mock_missing}}/mock.schema.json",
+    ]);
+    let errors = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        errors.contains("in the schema `--schema` or `TFGEN_SCHEMA` names"),
+        "{errors}"
+    );
+}
+
+#[test]
 fn an_error_names_its_place_and_its_stack_gets_no_files() {
     let workspace = MockWorkspace::new("stack-error");
     module_per_component_workspace(&workspace);

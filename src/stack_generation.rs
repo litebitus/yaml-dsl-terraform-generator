@@ -27,7 +27,7 @@ use crate::schema_overrides::SchemaOverrides;
 use crate::stack_discovery::git_files;
 use crate::template_filling::fill_body;
 use crate::value_writing::ValueWriter;
-use crate::yaml_values::evaluate_node;
+use crate::yaml_values::{evaluate_node, evaluate_text};
 
 /// Terraform's functions that read a file named by their first argument.
 const FILE_READING_FUNCTIONS: [&str; 9] = [
@@ -399,9 +399,13 @@ fn compile_document(
         Some(node) => Some(schema_entries(node, &frame).map_err(|diagnostic| vec![diagnostic])?),
         None => None,
     };
+    let run_schema = match schema_override {
+        Some(schema) => Some(run_schema_of(schema, &frame).map_err(|diagnostic| vec![diagnostic])?),
+        None => None,
+    };
     let schemas = StackSchemas {
         config_root,
-        run_schema: schema_override,
+        run_schema: run_schema.as_deref(),
         search_paths: generator_schema.as_deref().unwrap_or(&dsl.search_paths),
         schema_cache,
     };
@@ -411,6 +415,24 @@ fn compile_document(
     };
     let resolved = compiler.resolve_with(unit, &options)?;
     Ok((!resolved.fragment).then_some(resolved))
+}
+
+/// The schema `--schema` or `TFGEN_SCHEMA` names for the run, its refs filled
+/// for the stack.
+fn run_schema_of(schema: &str, frame: &RefFrame<'_>) -> Result<String, Diagnostic> {
+    let named = |message: &str| {
+        Diagnostic::unplaced(format!(
+            "{message}, in the schema `--schema` or `TFGEN_SCHEMA` names"
+        ))
+    };
+    let position = Position::new(&std::sync::Arc::from(schema), 1, 1);
+    let filled =
+        evaluate_text(schema, &position, frame).map_err(|diagnostic| named(&diagnostic.message))?;
+    filled
+        .as_ref()
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| named("the schema is not text"))
 }
 
 /// A generator's `schema` list, its refs filled for the stack, each entry with
