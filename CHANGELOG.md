@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.10 — 2026-11-08
+
 - Command line
   - Errors are drawn by the YAML DSL standard's diagnostic renderer, a schema note shown as `= [schema]`.
 - Generation
