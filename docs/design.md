@@ -563,7 +563,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
 - `tfgen` writes a file only where its contents change.
 - A run lists each stack it changed, in path order, with the files it changed under it, marked as `terramate generate` marks them: `[+]` created, `[~]` changed, `[-]` deleted. It ends with how many of the stacks it compared changed, `1 of 141 stacks changed`; a stack with errors is not compared.
 - A stack with an error gets no files, and the run exits non-zero. A stack's errors are reported in file order, then a line counting them.
-- An error is reported as a compiler reports one:
+- An error is drawn by the YAML DSL standard's diagnostic renderer, [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/package-design.md) under Diagnostic renderer, which states the lines shown, their division to the terminal's width and their color:
 
   ```
   error: `brnch` is not a field of `publish`
@@ -582,9 +582,8 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
      = help: did you mean `branch`?
   ```
 
-  The source shows two lines on each side of the wrong one, and above them each line it is nested under. An error is placed at the text that caused it: a document's, a template's, `tfgen.yml`'s or a stack descriptor's. A misspelt name carries the closest one the compiler suggests as its help.
+  An error is placed at the text that caused it: a document's, a template's, `tfgen.yml`'s or a stack descriptor's. The source shown is that file's text, named by its path from the repo root, and empty where the file cannot be read. A misspelt name carries the closest one the compiler suggests as its help.
 - A template's refs to `each` and `reference` are checked when the config is read: each root is read only in the templates filled with it, and only for its fields.
-- A report's lines divide to the terminal's width as the devops SDK lays a record out: nothing is cut, a line divides where the Unicode line breaking rules allow and after a machine string's separator, never inside a comparison, what wraps continues one level in, and where a row has no room its indentation gives first. A wrapped source line is underlined once, under the row the wrong text ends on, and a label that does not fit beside the underline takes its own rows under it. Output that is not a terminal is never divided.
 - Color is on where the output is a terminal and `NO_COLOR` is unset; `--color` and `--no-color` decide it.
 - `--schema` and `TFGEN_SCHEMA` name, by DSL id, the schema the run reads that DSL's documents against, ahead of their modelines, its refs filled for each stack, as `{{stack.modules_version}}`; a flag wins over the variable for the DSL it names, and a path is read from the working directory. A document's modeline is never changed for it.
 - A generated file a stack no longer produces is deleted, so a stack's files always match its documents. Only a file carrying `tfgen`'s header, in a stack the run generates, is ever deleted.

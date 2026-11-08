@@ -7,7 +7,6 @@ mod error_report;
 mod format_function;
 mod generated_files;
 mod hcl_conversion;
-mod line_wrapping;
 mod ref_paths;
 mod ref_scope;
 mod schema_cache;
@@ -31,13 +30,14 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use terminal_size::{Height, Width, terminal_size_of};
 use yaml_dsl_spec::Diagnostic;
+use yaml_dsl_spec_diagnostic_renderer::{RenderStyle, Severity};
 
 use crate::command_line::{Request, USAGE, command_line};
 use crate::config_files::{
     DEFAULT_SCHEMA_CACHE_CAPACITY, DSL_CONFIG_FILE, LoadedConfig, LoadedConfigs,
 };
 use crate::disk_source::DiskSource;
-use crate::error_report::{ReportStyle, Severity, SourceFiles, report};
+use crate::error_report::{SourceFiles, plain_error, report, stack_changes, stack_summary};
 use crate::generated_files::{FileChange, write_stack_files};
 use crate::schema_cache::{SchemaCache, schema_cache_directory};
 use crate::schema_overrides::{SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, variable_pairs};
@@ -90,11 +90,11 @@ fn main() -> ExitCode {
     };
     let terminal_width = |size: Option<(Width, Height)>| size.map(|(Width(width), _)| width.into());
     let styles = OutputStyles {
-        output: ReportStyle {
+        output: RenderStyle {
             color: colored(std::io::stdout().is_terminal()),
             width: terminal_width(terminal_size_of(std::io::stdout())),
         },
-        errors: ReportStyle {
+        errors: RenderStyle {
             color: colored(std::io::stderr().is_terminal()),
             width: terminal_width(terminal_size_of(std::io::stderr())),
         },
@@ -123,7 +123,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(message) => {
-            eprintln!("{}", styles.errors.plain_error(&message));
+            eprintln!("{}", plain_error(styles.errors, &message));
             ExitCode::FAILURE
         }
     }
@@ -132,14 +132,14 @@ fn main() -> ExitCode {
 /// How standard output and standard error are painted.
 #[derive(Clone, Copy)]
 struct OutputStyles {
-    output: ReportStyle,
-    errors: ReportStyle,
+    output: RenderStyle,
+    errors: RenderStyle,
 }
 
 /// Prints errors as reports, reading each source file once.
 struct ErrorPrinter<'r> {
     root: &'r Path,
-    style: ReportStyle,
+    style: RenderStyle,
     sources: SourceFiles,
     warned: BTreeSet<String>,
 }
@@ -171,7 +171,7 @@ impl ErrorPrinter<'_> {
     }
 
     fn message(&self, message: &str) {
-        eprintln!("{}", self.style.plain_error(message));
+        eprintln!("{}", plain_error(self.style, message));
     }
 }
 
@@ -308,9 +308,11 @@ fn run(
                 }
                 eprintln!(
                     "{}",
-                    styles
-                        .errors
-                        .stack_summary(&shown(&job.directory, &root), diagnostics.len())
+                    stack_summary(
+                        styles.errors,
+                        &shown(&job.directory, &root),
+                        diagnostics.len()
+                    )
                 );
                 succeeded = false;
             }
@@ -318,11 +320,11 @@ fn run(
     }
     changed_stacks.sort_by(|first, second| first.0.cmp(&second.0));
     for (stack, files) in &changed_stacks {
-        println!("{}", styles.output.stack_changes(stack, files));
+        println!("{}", stack_changes(styles.output, stack, files));
     }
     println!(
         "{}",
-        styles.output.changed_stacks(changed_stacks.len(), compared)
+        error_report::changed_stacks(changed_stacks.len(), compared)
     );
     Ok(succeeded)
 }
