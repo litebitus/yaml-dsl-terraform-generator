@@ -47,7 +47,7 @@
 
 - Generation
   - Reads `yaml-dsl.yml` up to v1.2, through yaml-dsl-compiler 0.1.2 and yaml-dsl-spec 0.1.4.
-  - Validates a document by its DSL's `validator` block: `merge_base_keys`, `allow_quoted_values` and requirement markers read, and each problem worded as the YAML DSL editor words it.
+  - Validates a document by its DSL's `validator` block: `merge_base_keys`, `allow_quoted_values` and requiredness markers read, and each problem worded as the YAML DSL editor words it.
   - A `tfgen.yml` problem is worded as a document's is: `` `key` is required ``, `` `key` is not a field of … ``, `` `version` must be one of … ``, `` `each` must be string ``.
 
 ## v0.0.2 — 2026-11-01
