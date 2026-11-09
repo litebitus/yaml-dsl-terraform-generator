@@ -23,11 +23,14 @@ use crate::template_filling::check_fixed_roots;
 pub const DSL_CONFIG_FILE: &str = "yaml-dsl.yml";
 pub const TFGEN_CONFIG_FILE: &str = "tfgen.yml";
 /// The `tfgen.yml` formats tfgen reads, by their `version`.
-const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1", "1.2", "1.3"];
+const TFGEN_CONFIG_VERSIONS: &[&str] = &["1", "1.0", "1.1", "1.2", "1.3", "1.4"];
 /// The `tfgen.yml` format that has no `performance`.
 const UNTUNED_CONFIG_VERSION: &str = "1.0";
 /// The `tfgen.yml` formats whose `values` have no `first`.
 const FIRSTLESS_CONFIG_VERSIONS: &[&str] = &["1.0", "1.1"];
+/// The `tfgen.yml` formats whose generators have no
+/// `validation_fallback_to_remote_schemas`.
+const FALLBACKLESS_CONFIG_VERSIONS: &[&str] = &["1.0", "1.1", "1.2", "1.3"];
 const DEFAULT_DESCRIPTOR: &str = "stack.tg.hcl";
 pub const DEFAULT_SCHEMA_CACHE_CAPACITY: usize = 100;
 
@@ -65,6 +68,10 @@ pub struct Generator {
     /// Where the schema is, when a document's modeline names none on disk: a list
     /// of paths, path patterns and URLs, each with refs, the first found taken.
     pub schema: Option<Node>,
+    /// Whether a document the schema found for it rejects is compiled again against
+    /// the list's remote schemas (S3 and HTTP) after that schema, in order, the
+    /// first that accepts it taken.
+    pub validation_fallback_to_remote_schemas: bool,
     pub builtin_values: Vec<(String, Node)>,
     pub data_files: Vec<PathPattern>,
     pub values: Vec<(String, ValueRule)>,
@@ -335,6 +342,15 @@ impl Generator {
         let mut generator = MapReader::new(&entry.value, &what)?;
         let written_to = text(generator.required("written_to")?, "`written_to`")?;
         let schema = generator.optional("schema").cloned();
+        let validation_fallback_to_remote_schemas =
+            if FALLBACKLESS_CONFIG_VERSIONS.contains(&version) {
+                false
+            } else {
+                match generator.optional("validation_fallback_to_remote_schemas") {
+                    Some(flag) => boolean(flag, "`validation_fallback_to_remote_schemas`")?,
+                    None => false,
+                }
+            };
         let builtin_values = match generator.optional("builtin_values") {
             Some(values) => entries(values, "`builtin_values`")?
                 .iter()
@@ -377,6 +393,7 @@ impl Generator {
             position: entry.key_position.clone(),
             written_to,
             schema,
+            validation_fallback_to_remote_schemas,
             builtin_values,
             data_files,
             values,
@@ -716,9 +733,8 @@ impl<'n> MapReader<'n> {
                 let fields: Vec<String> = self.read.iter().map(|key| (*key).to_owned()).collect();
                 return Err(Diagnostic::at(
                     &entry.key_position,
-                    format!("`{}` is not a field of {}", entry.key, self.what),
+                    format!("`{}` is not defined in the schema", entry.key),
                 )
-                .with_label(format!("{} has no field `{}`", self.what, entry.key))
                 .with_help(did_you_mean(&entry.key, &fields)));
             }
         }
@@ -746,6 +762,13 @@ fn text(node: &Node, what: &str) -> Result<String, Diagnostic> {
     node.as_str()
         .map(str::to_owned)
         .ok_or_else(|| type_problem(node, what, "string"))
+}
+
+fn boolean(node: &Node, what: &str) -> Result<bool, Diagnostic> {
+    match node.kind {
+        NodeKind::Bool(flag) => Ok(flag),
+        _ => Err(type_problem(node, what, "boolean")),
+    }
 }
 
 fn positive_whole_number(node: &Node, what: &str) -> Result<usize, Diagnostic> {

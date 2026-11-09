@@ -286,6 +286,14 @@ schema:
   - "s3://mock-schemas/mock-modules/{{stack.modules_version}}/mock.schema.json?assume_role={{tfgen.mock_role}}"
 ```
 
+The list is a presence test: the first entry found is the schema. A generator with `validation_fallback_to_remote_schemas: true` adds a validation fallback: when the schema found rejects the document, it is compiled again against the list's remote schemas (S3 and HTTP) after that schema, in order, the first that accepts it taken. When none accepts it, its problems are reported against the schema found.
+
+- A local file the modeline names falls back to every remote schema of the list.
+- Local entries are skipped. A local schema is a copy, as current as whatever last wrote it, and the copies a document reaches are written together, so only a schema read from its source can accept what one of them rejects.
+- A remote schema that cannot be read is skipped.
+- A schema the run names, and a remote schema a modeline names, does not fall back: each is what the run or the document states.
+- When a fallback schema accepts the document, the stack is generated. When the document's modeline named the schema found, the problems it reported are errors still, each without its `help`, since what it suggests the fallback schema has accepted as written; then a warning, `a fallback schema accepted the document`, placed at that schema's entry and labeled with the address read. When the list found it, nothing is reported: the document depends on the list.
+
 - A DSL's schema is either published at a URL or already on local disk when `tfgen` runs: `tfgen` downloads no module or package to find it.
 - The schema holds the DSL's function table as well as its rules, so a document is never compiled without one.
 - What reading a schema warns of, such as a credential refused, is reported once per run as a warning, and the stack is still generated.
@@ -566,7 +574,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
 - An error is drawn by the YAML DSL standard's diagnostic renderer, [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/package-design.md) under Diagnostic renderer, which states the lines shown, their division to the terminal's width and their color:
 
   ```
-  error: `brnch` is not a field of `publish`
+  error: `brnch` is not defined in the schema
     --> services/mock-api/mock-dsl.yml:57:5
      |
   52 | workflow:
@@ -574,7 +582,7 @@ tfgen completion zsh            # the shell's completion script: bash, zsh or fi
   ...
   56 |     branch: main
   57 |     brnch: main
-     |     ^^^^^ `publish` has no field `brnch`
+     |     ^^^^^
   58 |     triggers:
   59 |       push:
      |

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Generation
+  - A document a schema rejects falls back to the generator's remote schemas, `validation_fallback_to_remote_schemas` in `tfgen.yml` 1.4.
+  - An unknown field, in a document or in `tfgen.yml`, reads `` `name` is not defined in the schema ``, with no label, and a warning's carets and label are yellow.
+
 ## v0.0.10 — 2026-11-08
 
 - Command line

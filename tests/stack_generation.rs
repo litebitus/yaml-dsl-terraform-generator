@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 
 const DSL_CONFIG: &str = r#"version: "1"
 dsls:
@@ -498,6 +499,68 @@ fn a_named_stack_alone_is_generated() {
 }
 
 #[test]
+fn a_problem_is_drawn_from_the_layer_file_that_holds_it() {
+    let workspace = MockWorkspace::new("layer-attribution");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "mock.schema.json",
+        r#"{
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": { "rotation": { "type": "string" } }
+              }
+            },
+            "queue": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["retention"],
+                "properties": { "visibility": { "type": "string" } }
+              }
+            }
+          }
+        }"#,
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains(concat!(
+            " --> stacks/mock-dsl.yml:7:15\n",
+            "  |\n",
+            "5 | key:\n",
+            "6 |   name mock-main:\n",
+            "7 |     rotation: true\n",
+        )),
+        "{errors}"
+    );
+    assert!(
+        errors.contains(concat!(
+            " --> stacks/dev/mock-dsl.yml:5:17\n",
+            "  |\n",
+            "3 | queue:\n",
+            "4 |   name mock-orders:\n",
+            "5 |     visibility: 60\n",
+        )),
+        "{errors}"
+    );
+    assert!(!errors.contains("visibility: 30\n  |"), "{errors}");
+    assert!(
+        errors.contains(concat!(
+            " --> stacks/mock-dsl.yml:2:3\n",
+            "  |\n",
+            "1 | queue:\n",
+            "2 |   name mock-orders:\n",
+        )),
+        "{errors}"
+    );
+}
+
+#[test]
 fn a_generator_schema_is_the_fallback_when_the_modeline_names_none() {
     let workspace = MockWorkspace::new("generator-schema");
     module_per_component_workspace(&workspace);
@@ -547,6 +610,389 @@ fn a_generator_schema_is_the_fallback_when_the_modeline_names_none() {
     assert_eq!(
         workspace.read("per-component/queue-stack/main.tf"),
         MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+/// An HTTP server on a port of its own, answering each named path with its schema
+/// and any other with `404`. Dropping it, as a failing test does too, stops and
+/// joins its thread.
+struct MockSchemaServer {
+    address: String,
+    server: Arc<tiny_http::Server>,
+    serving: Option<JoinHandle<()>>,
+}
+
+impl MockSchemaServer {
+    fn start(schemas: &[(&str, &str)]) -> Self {
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let address = server.server_addr().to_string();
+        let schemas: Vec<(String, String)> = schemas
+            .iter()
+            .map(|(path, text)| (format!("/{path}"), (*text).to_owned()))
+            .collect();
+        let serving = Arc::clone(&server);
+        let serving = thread::spawn(move || {
+            for request in serving.incoming_requests() {
+                let answer = match schemas.iter().find(|(path, _)| path == request.url()) {
+                    Some((_, text)) => tiny_http::Response::from_string(text.clone()),
+                    None => tiny_http::Response::from_string("").with_status_code(404),
+                };
+                let _ = request.respond(answer);
+            }
+        });
+        Self {
+            address,
+            server,
+            serving: Some(serving),
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://{}/{path}", self.address)
+    }
+}
+
+impl Drop for MockSchemaServer {
+    fn drop(&mut self) {
+        self.server.unblock();
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.join();
+        }
+    }
+}
+
+const STALE_LOCAL_SCHEMA: &str = r#"{"type": "object", "required": ["mock_initialized"]}"#;
+const REJECTING_REMOTE_SCHEMA: &str = r#"{"type": "object", "required": ["mock_remote"]}"#;
+
+/// The per-component workspace with its document's modeline naming a local copy
+/// that rejects it, and a generator whose `schema` list holds that copy's pattern
+/// then `remote_urls`, with a validation fallback or without.
+fn stale_local_schema_workspace(
+    workspace: &MockWorkspace,
+    remote_urls: &[String],
+    validation_fallback: bool,
+) {
+    module_per_component_workspace(workspace);
+    workspace.write(
+        "per-component/queue-stack/.terraform/modules/queue/mock.schema.json",
+        STALE_LOCAL_SCHEMA,
+    );
+    workspace.write(
+        "per-component/queue-stack/mock-dsl.yml",
+        concat!(
+            "# yaml-language-server: $schema=.terraform/modules/queue/mock.schema.json\n",
+            "queue:\n  name mock-orders:\n    visibility: 30\n",
+        ),
+    );
+    let mut generator = String::from(
+        "    written_to: main.tf\n    schema:\n      - .terraform/modules/*/mock.schema.json\n",
+    );
+    for url in remote_urls {
+        generator.push_str(&format!("      - \"{url}\"\n"));
+    }
+    if validation_fallback {
+        generator.push_str("    validation_fallback_to_remote_schemas: true\n");
+    }
+    workspace.write(
+        "per-component/tfgen.yml",
+        &MODULE_PER_COMPONENT_CONFIG.replace("    written_to: main.tf\n", &generator),
+    );
+}
+
+#[test]
+fn a_document_a_local_modeline_schema_rejects_falls_back_to_the_first_remote_that_accepts_it() {
+    let server = MockSchemaServer::start(&[
+        ("rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+        ("accepting.schema.json", SCHEMA),
+    ]);
+    let remote_urls = [
+        server.url("rejecting.schema.json"),
+        server.url("accepting.schema.json"),
+    ];
+    let workspace = MockWorkspace::new("validation-fallback");
+    stale_local_schema_workspace(&workspace, &remote_urls, false);
+    let presence_only = workspace.run(&["--no-color"]);
+    assert!(!presence_only.status.success());
+    let errors = String::from_utf8_lossy(&presence_only.stderr);
+    assert!(
+        errors.contains("`mock_initialized` is required"),
+        "{errors}"
+    );
+    stale_local_schema_workspace(&workspace, &remote_urls, true);
+    let fallen_back = workspace.run(&["--no-color"]);
+    assert!(
+        fallen_back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fallen_back.stderr)
+    );
+    assert_eq!(
+        workspace.read("per-component/queue-stack/main.tf"),
+        MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+#[test]
+fn a_fallback_that_passes_reports_the_failure_without_its_help_and_the_schema_used() {
+    let server = MockSchemaServer::start(&[("accepting.schema.json", SCHEMA)]);
+    let accepting = server.url("accepting.schema.json");
+    let workspace = MockWorkspace::new("validation-fallback-report");
+    stale_local_schema_workspace(&workspace, std::slice::from_ref(&accepting), false);
+    workspace.write(
+        "per-component/queue-stack/.terraform/modules/queue/mock.schema.json",
+        r#"{"type": "object", "properties": {"queues": {}}, "additionalProperties": false}"#,
+    );
+    let presence_only = workspace.run(&["--no-color"]);
+    assert!(!presence_only.status.success());
+    let errors = String::from_utf8_lossy(&presence_only.stderr);
+    assert!(errors.contains("did you mean `queues`?"), "{errors}");
+    stale_local_schema_workspace(&workspace, std::slice::from_ref(&accepting), true);
+    workspace.write(
+        "per-component/queue-stack/.terraform/modules/queue/mock.schema.json",
+        r#"{"type": "object", "properties": {"queues": {}}, "additionalProperties": false}"#,
+    );
+    let fallen_back = workspace.run(&["--no-color"]);
+    let errors = String::from_utf8_lossy(&fallen_back.stderr);
+    assert!(fallen_back.status.success(), "{errors}");
+    assert!(
+        errors.contains("error: `queue` is not defined in the schema"),
+        "{errors}"
+    );
+    assert!(!errors.contains("did you mean"), "{errors}");
+    assert!(
+        errors.contains("warning: a fallback schema accepted the document"),
+        "{errors}"
+    );
+    assert!(errors.contains(&accepting), "{errors}");
+    assert!(errors.contains("--> per-component/tfgen.yml:"), "{errors}");
+}
+
+/// The AWS command line's answer to `s3api get-object`: the accepting schema for
+/// the key `accepting.schema.json`, the rejecting one for any other.
+const AWS_ANSWERING: &str = r#"#!/bin/sh
+key=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --key) key="$2"; shift 2 ;;
+    --bucket|--if-none-match) shift 2 ;;
+    s3api|get-object) shift ;;
+    *) out="$1"; shift ;;
+  esac
+done
+if [ "$key" = "accepting.schema.json" ]; then
+  printf '%s' '{"type": "object"}' > "$out"
+else
+  printf '%s' '{"type": "object", "required": ["mock_remote"]}' > "$out"
+fi
+echo '{"ETag": "\"mock-s3-etag\""}'
+"#;
+
+#[test]
+fn a_validation_fallback_reads_s3_and_http_remote_schemas_alike_in_the_list_order() {
+    let server = MockSchemaServer::start(&[("rejecting.schema.json", REJECTING_REMOTE_SCHEMA)]);
+    let workspace = MockWorkspace::new("validation-fallback-s3");
+    let remote_urls = [
+        server.url("rejecting.schema.json"),
+        "s3://mock-schemas/accepting.schema.json".to_owned(),
+    ];
+    stale_local_schema_workspace(&workspace, &remote_urls, true);
+    workspace.write("mock-bin/aws", AWS_ANSWERING);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            workspace.root.join("mock-bin/aws"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        workspace.root.join("mock-bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = workspace.run_with(&["--no-color"], &[("PATH", &path)]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        workspace.read("per-component/queue-stack/main.tf"),
+        MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+#[test]
+fn a_document_the_list_local_schema_rejects_falls_back_past_an_unread_remote() {
+    let server = MockSchemaServer::start(&[("accepting.schema.json", SCHEMA)]);
+    let workspace = MockWorkspace::new("validation-fallback-list-local");
+    let remote_urls = [
+        "http://127.0.0.1:9/unread.schema.json".to_owned(),
+        server.url("accepting.schema.json"),
+    ];
+    stale_local_schema_workspace(&workspace, &remote_urls, true);
+    workspace.write(
+        "per-component/queue-stack/mock-dsl.yml",
+        "queue:\n  name mock-orders:\n    visibility: 30\n",
+    );
+    let output = workspace.run(&["--no-color"]);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{errors}");
+    assert!(!errors.contains("error:"), "{errors}");
+    assert!(
+        !errors.contains("a fallback schema accepted the document"),
+        "{errors}"
+    );
+    assert_eq!(
+        workspace.read("per-component/queue-stack/main.tf"),
+        MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+#[test]
+fn a_document_without_a_modeline_a_later_remote_accepts_reports_nothing() {
+    let server = MockSchemaServer::start(&[
+        ("rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+        ("accepting.schema.json", SCHEMA),
+    ]);
+    let workspace = MockWorkspace::new("validation-fallback-list-silent");
+    let remote_urls = [
+        server.url("rejecting.schema.json"),
+        server.url("accepting.schema.json"),
+    ];
+    stale_local_schema_workspace(&workspace, &remote_urls, true);
+    workspace.write(
+        "per-component/queue-stack/mock-dsl.yml",
+        "queue:\n  name mock-orders:\n    visibility: 30\n",
+    );
+    let output = workspace.run(&["--no-color"]);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{errors}");
+    assert!(!errors.contains("error:"), "{errors}");
+    assert!(!errors.contains("warning:"), "{errors}");
+    assert!(!errors.contains("mock_initialized"), "{errors}");
+    assert!(!errors.contains("mock_remote"), "{errors}");
+    assert_eq!(
+        workspace.read("per-component/queue-stack/main.tf"),
+        MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+#[test]
+fn a_document_without_a_modeline_no_remote_schema_accepts_is_reported_against_the_list_schema() {
+    let server = MockSchemaServer::start(&[
+        ("rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+        ("also-rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+    ]);
+    let workspace = MockWorkspace::new("validation-fallback-list-rejected");
+    let remote_urls = [
+        server.url("rejecting.schema.json"),
+        server.url("also-rejecting.schema.json"),
+    ];
+    stale_local_schema_workspace(&workspace, &remote_urls, true);
+    workspace.write(
+        "per-component/queue-stack/mock-dsl.yml",
+        "queue:\n  name mock-orders:\n    visibility: 30\n",
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("`mock_initialized` is required"),
+        "{errors}"
+    );
+    assert!(!errors.contains("mock_remote"), "{errors}");
+}
+
+#[test]
+fn a_document_the_list_remote_schema_rejects_falls_back_to_a_later_remote() {
+    let server = MockSchemaServer::start(&[
+        ("rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+        ("accepting.schema.json", SCHEMA),
+    ]);
+    let workspace = MockWorkspace::new("validation-fallback-list-remote");
+    module_per_component_workspace(&workspace);
+    workspace.write(
+        "per-component/tfgen.yml",
+        &MODULE_PER_COMPONENT_CONFIG.replace(
+            "    written_to: main.tf\n",
+            &format!(
+                concat!(
+                    "    written_to: main.tf\n",
+                    "    schema:\n",
+                    "      - \"{}\"\n",
+                    "      - \"{}\"\n",
+                    "    validation_fallback_to_remote_schemas: true\n",
+                ),
+                server.url("rejecting.schema.json"),
+                server.url("accepting.schema.json"),
+            ),
+        ),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        workspace.read("per-component/queue-stack/main.tf"),
+        MODULE_PER_COMPONENT_MAIN
+    );
+}
+
+#[test]
+fn a_document_no_remote_schema_accepts_is_reported_against_its_local_schema() {
+    let server = MockSchemaServer::start(&[("rejecting.schema.json", REJECTING_REMOTE_SCHEMA)]);
+    let workspace = MockWorkspace::new("validation-fallback-rejected");
+    stale_local_schema_workspace(&workspace, &[server.url("rejecting.schema.json")], true);
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("`mock_initialized` is required"),
+        "{errors}"
+    );
+    assert!(!errors.contains("mock_remote"), "{errors}");
+}
+
+#[test]
+fn a_document_a_remote_modeline_schema_rejects_does_not_fall_back() {
+    let server = MockSchemaServer::start(&[
+        ("rejecting.schema.json", REJECTING_REMOTE_SCHEMA),
+        ("accepting.schema.json", SCHEMA),
+    ]);
+    let workspace = MockWorkspace::new("validation-fallback-remote-modeline");
+    stale_local_schema_workspace(&workspace, &[server.url("accepting.schema.json")], true);
+    workspace.write(
+        "per-component/queue-stack/mock-dsl.yml",
+        &format!(
+            "# yaml-language-server: $schema={}\nqueue:\n  name mock-orders:\n    visibility: 30\n",
+            server.url("rejecting.schema.json")
+        ),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("`mock_remote` is required"), "{errors}");
+}
+
+#[test]
+fn the_validation_fallback_is_a_generator_field_from_format_1_4() {
+    let workspace = MockWorkspace::new("validation-fallback-version");
+    stale_local_schema_workspace(&workspace, &[], true);
+    let config = workspace.read("per-component/tfgen.yml");
+    workspace.write(
+        "per-component/tfgen.yml",
+        &config.replacen("version: \"1\"", "version: \"1.3\"", 1),
+    );
+    let output = workspace.run(&["--no-color"]);
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("`validation_fallback_to_remote_schemas` is not defined in the schema"),
+        "{errors}"
     );
 }
 
@@ -682,12 +1128,14 @@ fn a_config_of_a_version_tfgen_does_not_read_is_an_error_at_the_value() {
     assert!(errors.contains("--> tfgen.yml:1:10"), "{errors}");
     assert!(
         errors.contains(
-            "`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`"
+            "`version` must be one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`, `\"1.4\"`"
         ),
         "{errors}"
     );
     assert!(
-        errors.contains("`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`"),
+        errors.contains(
+            "`version` is one of `\"1\"`, `\"1.0\"`, `\"1.1\"`, `\"1.2\"`, `\"1.3\"`, `\"1.4\"`"
+        ),
         "{errors}"
     );
 }
@@ -699,7 +1147,7 @@ fn the_schema_cache_capacity_is_a_whole_number_from_one_of_format_1_1() {
     let cases = [
         ("1.1", "0", "`schema_cache_capacity` must be >= 1"),
         ("1.1", "many", "`schema_cache_capacity` must be integer"),
-        ("1.0", "100", "`performance` is not a field of tfgen.yml"),
+        ("1.0", "100", "`performance` is not defined in the schema"),
     ];
     for (version, capacity, message) in cases {
         let config = ONE_MODULE_CONFIG.replacen(
@@ -745,7 +1193,7 @@ fn a_config_problem_is_worded_as_the_standard_words_it() {
         (
             "scope: ENTRY",
             "scope: ENTRY\n        scop: ENTRY",
-            "`scop` is not a field of",
+            "`scop` is not defined in the schema",
         ),
         (
             "each: declaration",
@@ -860,7 +1308,7 @@ fn each_example_generates_the_files_it_commits() {
 fn every_tfgen_yml_of_the_repo_is_valid_against_the_published_schema() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let schema: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(manifest.join("schemas/tfgen-v1.3.schema.json")).unwrap(),
+        &fs::read_to_string(manifest.join("schemas/tfgen-v1.4.schema.json")).unwrap(),
     )
     .unwrap();
     let validator = jsonschema::draft202012::new(&schema).unwrap();

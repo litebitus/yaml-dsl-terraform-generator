@@ -22,7 +22,7 @@ use crate::ref_scope::{
     FixedRoot, GeneratorContext, RefFrame, SelectableDeclaration, StackContext,
 };
 use crate::schema_cache::SchemaCache;
-use crate::schema_lookup::{SchemaSource, StackSchemas};
+use crate::schema_lookup::{SchemaSource, StackSchemas, ValidationFallback};
 use crate::schema_overrides::SchemaOverrides;
 use crate::stack_discovery::git_files;
 use crate::template_filling::fill_body;
@@ -58,6 +58,9 @@ pub struct StackJob<'c> {
 pub struct StackFiles {
     pub directory: PathBuf,
     pub files: Vec<(PathBuf, String)>,
+    /// The problems the schema found for a document rejected it with, before a
+    /// fallback schema accepted it: reported as errors, the stack still generated.
+    pub rejections: Vec<Diagnostic>,
     /// What generating the stack warns of without failing it.
     pub warnings: Vec<Diagnostic>,
 }
@@ -65,6 +68,14 @@ pub struct StackFiles {
 struct CompiledDocument<'c> {
     generator: &'c Generator,
     resolved: ResolvedUnit,
+    rejections: Vec<Diagnostic>,
+}
+
+/// A document compiled: what it resolved to, and the problems the schema found
+/// for it rejected it with when a fallback schema accepted it instead.
+struct DocumentCompilation {
+    resolved: ResolvedUnit,
+    rejections: Vec<Diagnostic>,
 }
 
 pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>> {
@@ -153,9 +164,10 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
             &job.config.directory,
         );
         match compiled_document {
-            Ok(Some(resolved)) => compiled.push(CompiledDocument {
+            Ok(Some(compilation)) => compiled.push(CompiledDocument {
                 generator,
-                resolved,
+                resolved: compilation.resolved,
+                rejections: compilation.rejections,
             }),
             Ok(None) => {}
             Err(errors) => diagnostics.extend(errors),
@@ -219,6 +231,10 @@ pub fn generate_stack(job: &StackJob<'_>) -> Result<StackFiles, Vec<Diagnostic>>
     Ok(StackFiles {
         directory: job.directory.clone(),
         files,
+        rejections: compiled
+            .iter()
+            .flat_map(|document| document.rejections.iter().cloned())
+            .collect(),
         warnings: compiled
             .iter()
             .flat_map(|document| document.resolved.warnings.iter().cloned())
@@ -385,7 +401,7 @@ fn compile_document(
     schema_override: Option<&str>,
     schema_cache: &SchemaCache,
     config_root: &Path,
-) -> Result<Option<ResolvedUnit>, Vec<Diagnostic>> {
+) -> Result<Option<DocumentCompilation>, Vec<Diagnostic>> {
     let compiler = generated_compiler(dsl);
     let frame = RefFrame::of_stack(context);
     let mut builtins = BTreeMap::new();
@@ -408,13 +424,81 @@ fn compile_document(
         run_schema: run_schema.as_deref(),
         search_paths: generator_schema.as_deref().unwrap_or(&dsl.search_paths),
         schema_cache,
+        fallback_source: None,
     };
+    let builtins = StackBuiltins(builtins);
     let options = ResolveOptions {
-        builtins: Some(&StackBuiltins(builtins)),
+        builtins: Some(&builtins),
         schema_provider: Some(&schemas),
     };
-    let resolved = compiler.resolve_with(unit, &options)?;
-    Ok((!resolved.fragment).then_some(resolved))
+    let compilation = match compiler.resolve_with(unit, &options) {
+        Ok(resolved) => DocumentCompilation {
+            resolved,
+            rejections: Vec::new(),
+        },
+        Err(problems) if generator.validation_fallback_to_remote_schemas => {
+            let fallback = schemas.validation_fallback(unit);
+            let Some((mut resolved, source)) =
+                first_fallback_acceptance(compiler, unit, &schemas, &fallback, &builtins)
+            else {
+                return Err(problems);
+            };
+            if !fallback.modeline_named_found_schema {
+                return Ok((!resolved.fragment).then_some(DocumentCompilation {
+                    resolved,
+                    rejections: Vec::new(),
+                }));
+            }
+            resolved.warnings.push(
+                Diagnostic::at(
+                    &source.written_at,
+                    "a fallback schema accepted the document",
+                )
+                .with_label(source.location.clone()),
+            );
+            DocumentCompilation {
+                resolved,
+                rejections: problems.into_iter().map(without_help).collect(),
+            }
+        }
+        Err(problems) => return Err(problems),
+    };
+    Ok((!compilation.resolved.fragment).then_some(compilation))
+}
+
+/// A problem the schema found reported, without the fix its `help` suggests: a
+/// fallback schema has accepted the document as written.
+fn without_help(mut problem: Diagnostic) -> Diagnostic {
+    if let Some(notes) = problem.notes.as_mut() {
+        notes.help = None;
+    }
+    problem
+}
+
+/// The document compiled against the remote schemas a validation fallback reads,
+/// in the list's order, after the schema found for it rejected it: the first that
+/// accepts it and its entry, else none. A local copy is as current as whatever last
+/// wrote it, and the copies a document reaches are written together, so the
+/// fallback skips them; a remote schema that cannot be read is skipped too.
+fn first_fallback_acceptance<'s>(
+    compiler: &Compiler,
+    unit: &Unit,
+    schemas: &StackSchemas<'s>,
+    fallback: &ValidationFallback<'s>,
+    builtins: &StackBuiltins,
+) -> Option<(ResolvedUnit, &'s SchemaSource)> {
+    fallback.remote_sources.iter().copied().find_map(|source| {
+        let fallback_schemas = StackSchemas {
+            fallback_source: Some(source),
+            ..*schemas
+        };
+        let options = ResolveOptions {
+            builtins: Some(builtins),
+            schema_provider: Some(&fallback_schemas),
+        };
+        let resolved = compiler.resolve_with(unit, &options).ok()?;
+        Some((resolved, source))
+    })
 }
 
 /// The schema `--schema` or `TFGEN_SCHEMA` names for the run, its refs filled

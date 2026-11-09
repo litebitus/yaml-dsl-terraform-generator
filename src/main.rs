@@ -158,14 +158,14 @@ impl ErrorPrinter<'_> {
 
     /// Each warning once, however many stacks read what it is about.
     fn warning(&mut self, warning: &Diagnostic) {
-        if self.warned.insert(warning.message.clone()) {
-            let shown = report(
-                warning,
-                Severity::Warning,
-                self.root,
-                self.style,
-                &mut self.sources,
-            );
+        let shown = report(
+            warning,
+            Severity::Warning,
+            self.root,
+            self.style,
+            &mut self.sources,
+        );
+        if self.warned.insert(shown.clone()) {
             eprintln!("{shown}\n");
         }
     }
@@ -280,6 +280,9 @@ fn run(
     for (job, result) in jobs.iter().zip(results) {
         match result {
             Ok(stack) => {
+                for rejection in &stack.rejections {
+                    errors.diagnostic(rejection);
+                }
                 for warning in &stack.warnings {
                     errors.warning(warning);
                 }

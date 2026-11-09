@@ -1,6 +1,7 @@
 //! A document's schema, found as the editor finds a file's: the schema named for
 //! the run first, then its modeline, then the generator's `schema` list, else the
-//! DSL's `schema_search_paths`.
+//! DSL's `schema_search_paths`; and, for a validation fallback, one remote schema
+//! of the list.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,9 @@ pub struct StackSchemas<'s> {
     /// The generator's `schema` list, its refs filled, else the DSL's search paths.
     pub search_paths: &'s [SchemaSource],
     pub schema_cache: &'s SchemaCache,
+    /// The one remote schema of the list a validation fallback reads, after the
+    /// schema the lookup found rejected the document.
+    pub fallback_source: Option<&'s SchemaSource>,
 }
 
 /// A path, path pattern or URL a schema is looked for at, and where it was written,
@@ -41,6 +45,39 @@ struct Modeline {
     fragment: Option<String>,
 }
 
+/// Where a document's schema is read from, the first present in the lookup's order.
+/// `None` as the place a failure is reported means the run named it.
+enum SchemaChoice {
+    /// An S3 or HTTP schema, read from its source.
+    Remote {
+        location: String,
+        written_at: Option<Position>,
+        origin: SchemaOrigin,
+    },
+    /// A file on disk.
+    Local {
+        path: PathBuf,
+        written_at: Option<Position>,
+        origin: SchemaOrigin,
+    },
+    /// The file the run names, which is not on disk.
+    RunFileMissing(String),
+    /// Nothing the modeline or the list names is on disk.
+    NotFound,
+}
+
+/// What named the schema a lookup found.
+#[derive(Clone, Copy)]
+enum SchemaOrigin {
+    /// `--schema` or `TFGEN_SCHEMA`.
+    Run,
+    /// A validation fallback.
+    Fallback,
+    Modeline,
+    /// The list's entry at this index.
+    ListEntry(usize),
+}
+
 impl SchemaProvider for StackSchemas<'_> {
     fn schema_of(&self, unit: &Unit, document_text: &str) -> Result<DocumentSchema, Diagnostic> {
         let file: Arc<str> = Arc::from(unit.file.to_string_lossy().as_ref());
@@ -48,56 +85,176 @@ impl SchemaProvider for StackSchemas<'_> {
         let fragment = modeline
             .as_ref()
             .and_then(|modeline| modeline.fragment.clone());
-        let found = |schema: Result<(String, String, Vec<String>), Diagnostic>| {
-            schema.map(|(name, text, warnings)| DocumentSchema {
-                name,
-                text,
-                fragment: fragment.clone(),
-                warnings,
-            })
+        let read = match self.choice(unit, &file, modeline.as_ref()) {
+            SchemaChoice::Remote {
+                location,
+                written_at,
+                ..
+            } => self.read_url(&location, written_at.as_ref()),
+            SchemaChoice::Local {
+                path, written_at, ..
+            } => read_file(&path, written_at.as_ref()),
+            SchemaChoice::RunFileMissing(run_schema) => Err(Diagnostic::unplaced(format!(
+                "{run_schema}, the schema `--schema` or `TFGEN_SCHEMA` names, is not on disk"
+            ))),
+            SchemaChoice::NotFound => Err(Diagnostic::at(
+                &Position::new(&file, 1, 1),
+                "no schema found: neither the modeline nor the search paths name a file on disk",
+            )),
         };
+        read.map(|(name, text, warnings)| DocumentSchema {
+            name,
+            text,
+            fragment,
+            warnings,
+        })
+    }
+}
+
+/// What a validation fallback reads when the schema the lookup found rejects the
+/// document, and whether the document's modeline named that schema.
+pub struct ValidationFallback<'s> {
+    pub remote_sources: Vec<&'s SchemaSource>,
+    pub modeline_named_found_schema: bool,
+}
+
+impl<'s> StackSchemas<'s> {
+    /// The remote schemas (S3 and HTTP) a validation fallback reads, in the list's
+    /// order, when the schema the lookup found rejects the document: every remote
+    /// entry when the modeline names a file on disk, the remote entries after it
+    /// when the list found it, and none when the run or a modeline's remote schema
+    /// named it, which is the schema's own source.
+    pub fn validation_fallback(&self, unit: &Unit) -> ValidationFallback<'s> {
+        let found_choice = self.found_choice(unit);
+        let modeline_named_found_schema = matches!(
+            found_choice,
+            Some(
+                SchemaChoice::Local {
+                    origin: SchemaOrigin::Modeline,
+                    ..
+                } | SchemaChoice::Remote {
+                    origin: SchemaOrigin::Modeline,
+                    ..
+                }
+            )
+        );
+        let after = match found_choice {
+            Some(SchemaChoice::Local {
+                origin: SchemaOrigin::Modeline,
+                ..
+            }) => Some(0),
+            Some(
+                SchemaChoice::Local {
+                    origin: SchemaOrigin::ListEntry(index),
+                    ..
+                }
+                | SchemaChoice::Remote {
+                    origin: SchemaOrigin::ListEntry(index),
+                    ..
+                },
+            ) => Some(index + 1),
+            _ => None,
+        };
+        let remote_sources = match after {
+            Some(after) => self
+                .search_paths
+                .iter()
+                .skip(after)
+                .filter(|source| is_schema_url(&source.location))
+                .collect(),
+            None => Vec::new(),
+        };
+        ValidationFallback {
+            remote_sources,
+            modeline_named_found_schema,
+        }
+    }
+
+    /// The schema the lookup finds for the document on disk.
+    fn found_choice(&self, unit: &Unit) -> Option<SchemaChoice> {
+        let text = if unit.holds_no_documents {
+            String::new()
+        } else {
+            fs::read_to_string(&unit.file).ok()?
+        };
+        let file: Arc<str> = Arc::from(unit.file.to_string_lossy().as_ref());
+        Some(self.choice(unit, &file, modeline_of(&text).as_ref()))
+    }
+
+    /// The one place the schema is read from: a fallback's remote schema, else the
+    /// schema the run names, else the modeline's, else the list's first present.
+    fn choice(&self, unit: &Unit, file: &Arc<str>, modeline: Option<&Modeline>) -> SchemaChoice {
+        if let Some(source) = self.fallback_source {
+            return SchemaChoice::Remote {
+                location: source.location.clone(),
+                written_at: Some(source.written_at.clone()),
+                origin: SchemaOrigin::Fallback,
+            };
+        }
         if let Some(run_schema) = self.run_schema {
             if is_schema_url(run_schema) {
-                return found(self.read_url(run_schema, None));
+                return SchemaChoice::Remote {
+                    location: run_schema.to_owned(),
+                    written_at: None,
+                    origin: SchemaOrigin::Run,
+                };
             }
-            return found(read_file(Path::new(run_schema), None).map_err(|_| {
-                Diagnostic::unplaced(format!(
-                    "{run_schema}, the schema `--schema` or `TFGEN_SCHEMA` names, is not on disk"
-                ))
-            }));
+            let path = Path::new(run_schema);
+            return if path.is_file() {
+                SchemaChoice::Local {
+                    path: path.to_path_buf(),
+                    written_at: None,
+                    origin: SchemaOrigin::Run,
+                }
+            } else {
+                SchemaChoice::RunFileMissing(run_schema.to_owned())
+            };
         }
-        if let Some(modeline) = &modeline {
+        if let Some(modeline) = modeline {
             let (line, column) = modeline.location_position;
-            let written_at = Position::new(&file, line, column);
+            let written_at = Some(Position::new(file, line, column));
             if is_schema_url(&modeline.location) {
-                return found(self.read_url(&modeline.location, Some(&written_at)));
+                return SchemaChoice::Remote {
+                    location: modeline.location.clone(),
+                    written_at,
+                    origin: SchemaOrigin::Modeline,
+                };
             }
             let path = unit.directory.join(&modeline.location);
             if path.is_file() {
-                return found(read_file(&path, Some(&written_at)));
+                return SchemaChoice::Local {
+                    path,
+                    written_at,
+                    origin: SchemaOrigin::Modeline,
+                };
             }
         }
-        for source in self.search_paths {
+        for (index, source) in self.search_paths.iter().enumerate() {
             let entry = &source.location;
+            let written_at = Some(source.written_at.clone());
+            let origin = SchemaOrigin::ListEntry(index);
             if is_schema_url(entry) {
-                return found(self.read_url(entry, Some(&source.written_at)));
+                return SchemaChoice::Remote {
+                    location: entry.clone(),
+                    written_at,
+                    origin,
+                };
             }
             let (base, pattern) = match entry.strip_prefix(CONFIG_ROOT) {
                 Some(rest) => (self.config_root, rest.trim_start_matches('/')),
                 None => (unit.directory.as_path(), entry.as_str()),
             };
             if let Some(path) = matching_files(base, pattern).into_iter().next() {
-                return found(read_file(&path, Some(&source.written_at)));
+                return SchemaChoice::Local {
+                    path,
+                    written_at,
+                    origin,
+                };
             }
         }
-        Err(Diagnostic::at(
-            &Position::new(&file, 1, 1),
-            "no schema found: neither the modeline nor the search paths name a file on disk",
-        ))
+        SchemaChoice::NotFound
     }
-}
 
-impl StackSchemas<'_> {
     /// A URL's schema, a failure reported where the URL was written, or as the
     /// run's when the run named it.
     fn read_url(
@@ -273,6 +430,7 @@ mod tests {
             run_schema,
             search_paths,
             schema_cache,
+            fallback_source: None,
         }
     }
 
@@ -330,6 +488,54 @@ mod tests {
             .unwrap_err();
         assert!(missing.message.contains("is not on disk"));
         assert!(missing.position.is_none());
+    }
+
+    #[test]
+    fn a_validation_fallback_reads_the_remote_schemas_after_the_schema_found_in_order() {
+        let scratch = ScratchFolder::new("fallback-sources");
+        scratch.write("stack/local.json", r#"{"title": "local"}"#);
+        let copies = SchemaCache::new(scratch.0.join("copies"), MOCK_CAPACITY);
+        let (first, second) = (
+            "http://127.0.0.1:9/first.schema.json",
+            "s3://mock-schemas/second.schema.json",
+        );
+        let local_first = sources(&["local.json", first, "local.json", second]);
+        let remote_first = sources(&[first, "local.json", second]);
+        let unit = unit_in(&scratch.0);
+        let fallbacks = |text: &str, run_schema: Option<&str>, search_paths: &[SchemaSource]| {
+            scratch.write("stack/mock-dsl.yml", text);
+            let fallback =
+                schemas(&scratch.0, run_schema, search_paths, &copies).validation_fallback(&unit);
+            let locations = fallback
+                .remote_sources
+                .iter()
+                .map(|source| source.location.clone())
+                .collect::<Vec<_>>();
+            (locations, fallback.modeline_named_found_schema)
+        };
+        let named = "# yaml-language-server: $schema=local.json\nqueue: {}\n";
+        let unnamed = "queue: {}\n";
+        let named_remote = format!("# yaml-language-server: $schema={first}\nqueue: {{}}\n");
+        assert_eq!(
+            fallbacks(named, None, &remote_first),
+            (vec![first.to_owned(), second.to_owned()], true)
+        );
+        assert_eq!(
+            fallbacks(unnamed, None, &local_first),
+            (vec![first.to_owned(), second.to_owned()], false)
+        );
+        assert_eq!(
+            fallbacks(unnamed, None, &remote_first),
+            (vec![second.to_owned()], false)
+        );
+        assert_eq!(
+            fallbacks(named, Some("/work/changed.json"), &local_first),
+            (Vec::new(), false)
+        );
+        assert_eq!(
+            fallbacks(&named_remote, None, &local_first),
+            (Vec::new(), true)
+        );
     }
 
     #[test]
