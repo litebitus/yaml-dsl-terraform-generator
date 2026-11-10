@@ -2,7 +2,7 @@
 
 Each version is the format a `tfgen.yml` names in its `version`, and the schema file of that name. A version not yet released is headed `## <version> — unreleased`; the release workflow stamps it with the tfgen release that ships it and the date.
 
-## 1.4 — unreleased
+## 1.4 — tfgen v0.1.0, 2026-11-10
 
 - A generator takes `validation_fallback_to_remote_schemas`, default `false`.
 
