@@ -1336,9 +1336,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "yaml-dsl-compiler"
-version = "0.1.7-snapshot.20261109224455"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f8a307dc574df8aa6713745519d1f215434f23ce1d1c9c23d830ffdf53b707f"
+checksum = "f1ede971b1cf90ff213ea6f38a3d025bb0b5dd22c4162cf96a4fee57ca66b61d"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
@@ -1349,22 +1349,23 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec"
-version = "0.2.2-snapshot.20261109224131"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08c330255f612b511fee6bdd467ef8e92731353258b18e9260e1a73af50eda94"
+checksum = "4f943e1c8ad80546b45c7a63a413d3d6ac0d8a7e38c51e07d015eeb45f257d6a"
 dependencies = [
  "fancy-regex 0.20.0",
  "jsonschema",
  "saphyr-parser",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "yaml-dsl-spec-diagnostic-renderer"
-version = "0.2.2-snapshot.20261109224131"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e9f3707d86e5eaa8950cb2bfdb83460dfed1910175cb164de8d2e7709bd1165"
+checksum = "c72ef537e0a53dff94801a70e02dcf383c644115173b14046ef4ae0bfab120fd"
 dependencies = [
  "unicode-linebreak",
  "unicode-width",

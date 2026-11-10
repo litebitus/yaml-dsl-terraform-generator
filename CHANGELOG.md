@@ -5,6 +5,7 @@
 - Generation
   - A document a schema rejects falls back to the generator's remote schemas, `validation_fallback_to_remote_schemas` in `tfgen.yml` 1.4.
   - An unknown field, in a document or in `tfgen.yml`, reads `` `name` is not defined in the schema ``, with no label, and a warning's carets and label are yellow.
+  - Validation follows yaml-dsl-compiler 0.1.7: a merge base key's content and a merge with content not known require no field, an alternative beside a value not known yet is reported when every form fails regardless of it, dependency messages gather every part's needs, schema notes are verbatim, and an unloadable schema is reported in the standard's words.
 
 ## v0.0.10 — 2026-11-08
 
