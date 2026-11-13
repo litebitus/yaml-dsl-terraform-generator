@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Schemas
+  - Stacks generated at once that read the same schema URL fetch it once and read its kept copy.
+
 ## v0.1.0 — 2026-11-10
 
 - Generation

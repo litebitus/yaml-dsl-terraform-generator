@@ -7,7 +7,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -72,6 +72,9 @@ pub struct SchemaCache {
     aws_command: PathBuf,
     /// The credentials of each role assumed this run, by role.
     assumed_roles: Mutex<BTreeMap<String, RoleCredentials>>,
+    /// One lock per fetched URL, so stacks generated at once that read the same
+    /// schema fetch it once and the others read the copy it kept.
+    fetch_url_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
 }
 
 /// The temporary credentials an assumed role is read as.
@@ -276,6 +279,7 @@ impl SchemaCache {
             github_link_prefixes: GITHUB_LINK_PREFIXES.map(str::to_owned).to_vec(),
             aws_command: PathBuf::from(AWS_COMMAND),
             assumed_roles: Mutex::new(BTreeMap::new()),
+            fetch_url_locks: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -285,6 +289,10 @@ impl SchemaCache {
     /// refusal.
     pub fn read(&self, url: &str) -> Result<SchemaText, ReadFailure> {
         let parameters = editor_parameters(url).map_err(ReadFailure::of)?;
+        let fetch_url_lock = self.fetch_url_lock(&parameters.fetch_url);
+        let _reading_fetch_url = fetch_url_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let copy_path = self.copy_path(&parameters.fetch_url);
         let kept: Option<KeptCopy> = fs::read_to_string(&copy_path)
             .ok()
@@ -680,6 +688,15 @@ impl SchemaCache {
             assumed.insert(role.to_owned(), credentials.clone());
         }
         Ok(credentials)
+    }
+
+    /// The lock a read of `fetch_url` holds, the same one for every read of it.
+    fn fetch_url_lock(&self, fetch_url: &str) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .fetch_url_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(locks.entry(fetch_url.to_owned()).or_default())
     }
 
     fn copy_path(&self, fetch_url: &str) -> PathBuf {
@@ -1513,6 +1530,35 @@ echo '{"ETag": "\"mock-s3-etag\""}'
             (confirmed.text.as_str(), confirmed.warnings.len()),
             (SCHEMA, 0)
         );
+    }
+
+    /// The AWS command line counting each object it hands over, and taking long
+    /// enough over it that reads started together overlap.
+    const AWS_COUNTING: &str = r#"#!/bin/sh
+for argument in "$@"; do out="$argument"; done
+echo fetched >> "$(dirname "$0")/fetches"
+sleep 0.3
+printf '%s' '{"type": "object"}' > "$out"
+echo '{"ETag": "\"mock-s3-etag\""}'
+"#;
+
+    #[test]
+    fn stacks_reading_one_s3_schema_at_once_fetch_it_once_and_all_read_it() {
+        let scratch = ScratchDirectory::new("s3-concurrent");
+        let copies = aws_copies(&scratch, AWS_COUNTING);
+        let link = format!("{S3_LINK}?yaml_dsl_max_age_days=365");
+        let reads: Vec<Result<SchemaText, ReadFailure>> = thread::scope(|scope| {
+            let readers: Vec<_> = (0..4).map(|_| scope.spawn(|| copies.read(&link))).collect();
+            readers
+                .into_iter()
+                .map(|reader| reader.join().unwrap())
+                .collect()
+        });
+        for read in reads {
+            assert_eq!(read.unwrap().text, SCHEMA);
+        }
+        let fetches = fs::read_to_string(scratch.0.join("fetches")).unwrap();
+        assert_eq!(fetches.lines().count(), 1);
     }
 
     #[test]

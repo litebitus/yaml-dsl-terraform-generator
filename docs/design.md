@@ -269,6 +269,7 @@ A URL is read by the YAML DSL standard's rules for schema URLs, [yaml-dsl-spec](
 
 - A refused credential gives way to the next. Every credential refused before one is let in, or all of them with the kept copy read instead, is a warning naming where the credential came from and what renews it, such as `run aws sso login`. All refused with no kept copy is an error placed at the entry or modeline that named the link, with each refusal's reason and the fixes as its help; for a link `--schema` or `TFGEN_SCHEMA` names, the error names them.
 - A GitHub token is asked for once per run, so a renewed login is read on the next.
+- Stacks generated at once that read the same URL read it once: the first fetches it and keeps its copy, and the others wait for it and read that copy.
 
 A schema published with each release of the modules a stack pins takes two entries: the copy a stack's own `terraform init` keeps, and the release asset, for a stack not initialized yet:
 
