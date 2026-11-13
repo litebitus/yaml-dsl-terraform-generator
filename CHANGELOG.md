@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.1 — 2026-11-13
+
 ### Fixed
 
 - Schemas
