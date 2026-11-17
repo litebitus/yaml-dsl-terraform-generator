@@ -613,3 +613,7 @@ A run's cost grows with the stacks it compiles and never with the size of the re
 ## Release
 
 GoReleaser builds `tfgen` for darwin and linux, on arm64 and amd64, on a macOS runner so the darwin binaries link against the macOS SDK, and publishes a GitHub release with a Homebrew cask in `litebitus/homebrew-tap`. Each archive carries the completion scripts, generated from the binary being released, and the cask installs them.
+
+## TODO
+
+- A template attribute whose value is absent is left unwritten, rather than written with a default. Not designed.
