@@ -1,22 +1,117 @@
 //! A resolved value as HCL: scalars, lists and maps as themselves, a reference by
-//! the `references` template that matches it, and a call as a Terraform call.
+//! the `references` template that matches it, a call as a Terraform call, and a
+//! loop as a `for` expression.
 
-use yaml_dsl_compiler::output::{Expression, FunctionCall, Interpolation, ObjectKey, TemplatePart};
+use std::collections::BTreeSet;
+
+use yaml_dsl_compiler::output::{
+    Expression, FunctionCall, Interpolation, LoopSymbols, ObjectKey, TemplatePart, loop_expression,
+};
 use yaml_dsl_spec::Diagnostic;
-use yaml_dsl_spec::resolved::{self, Reference, Target, Value, ValueKind};
+use yaml_dsl_spec::resolved::{self, Loop, LoopBody, Reference, Target, Value, ValueKind};
 
 use crate::config_files::ReferenceRule;
+use crate::hcl_conversion::Sentinels;
 use crate::ref_scope::{FixedRoot, RefFrame};
-use crate::template_filling::fill_expression;
+use crate::template_filling::{fill_expression, parse_expression};
+
+/// The symbol a loop's variables are written as while its body is read for the
+/// variables it reads, which no reference template writes.
+const UNCHOSEN_LOOP_SYMBOL: &str = "__tfgen_loop_variable__";
 
 pub struct ValueWriter<'w> {
     references: &'w [ReferenceRule],
     frame: RefFrame<'w>,
+    /// Each loop variable around the value, by its name, with the `for` symbol it
+    /// is written as; the innermost last.
+    loop_symbols: Vec<(String, String)>,
 }
 
 impl<'w> ValueWriter<'w> {
     pub fn new(references: &'w [ReferenceRule], frame: RefFrame<'w>) -> Self {
-        Self { references, frame }
+        Self {
+            references,
+            frame,
+            loop_symbols: Vec::new(),
+        }
+    }
+
+    fn with_loop_symbols(&self, symbols: impl IntoIterator<Item = (String, String)>) -> Self {
+        let mut loop_symbols = self.loop_symbols.clone();
+        loop_symbols.extend(symbols);
+        Self {
+            references: self.references,
+            frame: self.frame,
+            loop_symbols,
+        }
+    }
+
+    /// A loop as a `for` expression, each loop variable written as a symbol that
+    /// hides nothing the body reads.
+    fn loop_expression(&self, left: &Loop, value: &Value) -> Result<Expression, Diagnostic> {
+        let collection = self.expression(&left.collection)?;
+        let unchosen = self.with_loop_symbols(
+            left.variables
+                .iter()
+                .map(|variable| (variable.clone(), UNCHOSEN_LOOP_SYMBOL.to_owned())),
+        );
+        let mut read_by_body = BTreeSet::new();
+        for body_value in body_values(&left.body) {
+            read_by_body.extend(unchosen.expression(body_value)?.variables_read());
+        }
+        let mut symbols: Vec<String> = Vec::new();
+        for variable in &left.variables {
+            let mut symbol = variable.clone();
+            while read_by_body.contains(&symbol) || symbols.contains(&symbol) {
+                symbol.push('_');
+            }
+            symbols.push(symbol);
+        }
+        let loop_symbols = match symbols.as_slice() {
+            [item] => LoopSymbols {
+                key: None,
+                item: item.clone(),
+            },
+            [key, item] => LoopSymbols {
+                key: Some(key.clone()),
+                item: item.clone(),
+            },
+            _ => {
+                return Err(Diagnostic::at(
+                    &value.position,
+                    "a loop takes one or two loop variables",
+                ));
+            }
+        };
+        let chosen = self.with_loop_symbols(left.variables.iter().cloned().zip(symbols));
+        loop_expression(collection, &left.body, &loop_symbols, |body_value| {
+            chosen.expression(body_value)
+        })
+    }
+
+    /// A loop variable as its `for` symbol, with the reference's path after it.
+    fn loop_variable(
+        &self,
+        reference: &Reference,
+        value: &Value,
+    ) -> Result<Expression, Diagnostic> {
+        let symbol = self
+            .loop_symbols
+            .iter()
+            .rev()
+            .find(|(name, _)| *name == reference.name)
+            .map(|(_, symbol)| symbol)
+            .ok_or_else(|| {
+                Diagnostic::at(
+                    &value.position,
+                    format!("`{}` reads a variable of no loop around it", reference.text),
+                )
+            })?;
+        parse_expression(
+            &format!("{symbol}{}", reference.path),
+            &Sentinels::default(),
+        )
+        .map_err(|message| Diagnostic::at(&value.position, message))
     }
 
     pub fn expression(&self, value: &Value) -> Result<Expression, Diagnostic> {
@@ -43,6 +138,7 @@ impl<'w> ValueWriter<'w> {
                     .collect::<Result<_, Diagnostic>>()?,
             ),
             ValueKind::Reference(reference) => self.reference(reference, value)?,
+            ValueKind::Loop(left) => self.loop_expression(left, value)?,
             ValueKind::Call(call) => Expression::Call(FunctionCall {
                 function: call.function.clone(),
                 arguments: call
@@ -72,6 +168,9 @@ impl<'w> ValueWriter<'w> {
 
     /// A reference, written by the first `references` template that matches it.
     fn reference(&self, reference: &Reference, value: &Value) -> Result<Expression, Diagnostic> {
+        if reference.target == Target::LoopVariable {
+            return self.loop_variable(reference, value);
+        }
         if reference.target == Target::Builtin {
             return Err(Diagnostic::at(
                 &value.position,
@@ -106,6 +205,18 @@ impl<'w> ValueWriter<'w> {
         );
         let frame = self.frame.with_reference(&reference_value);
         fill_expression(&rule.template, &frame, self)
+    }
+}
+
+/// The values one pass of a loop yields: a list body's item, or each key and value
+/// of a map body.
+fn body_values(body: &LoopBody) -> Vec<&Value> {
+    match body {
+        LoopBody::Item(item) => vec![item],
+        LoopBody::Entries(entries) => entries
+            .iter()
+            .flat_map(|entry| [&entry.key, &entry.value])
+            .collect(),
     }
 }
 

@@ -499,6 +499,144 @@ fn a_named_stack_alone_is_generated() {
 }
 
 #[test]
+fn a_loop_over_a_value_known_at_plan_is_written_as_a_for_expression() {
+    let workspace = MockWorkspace::new("loop-left-for-target");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "yaml-dsl.yml",
+        &DSL_CONFIG
+            .replacen(
+                "    locals: { scope_name: local, path_separator: \".\" }\n",
+                concat!(
+                    "    locals: { scope_name: local, path_separator: \".\" }\n",
+                    "    loops: { scope_name: LOOP }\n",
+                    "    function:\n",
+                    "      definitions: [schema]\n",
+                    "      call_result_reference_positions: [whole_scalar]\n",
+                    "      calls_not_allowed_at: []\n",
+                    "      marker_function:\n",
+                    "        call_marker: fn.\n",
+                    "        splat_operator: \"*\"\n",
+                    "        calls_without_name_allowed: true\n",
+                ),
+                1,
+            )
+            .replacen(
+                "      local:\n",
+                concat!(
+                    "      LOOP:\n",
+                    "        regions: [\"$\"]\n",
+                    "        later_items_of_declaring_list: false\n",
+                    "        named_by_parent_key: false\n",
+                    "        builtin_names: []\n",
+                    "      local:\n",
+                ),
+                1,
+            )
+            .replacen(
+                "      - pattern: \"^(?<name>[a-z_]+)$\"\n",
+                concat!(
+                    "      - pattern: \"^~(?<name>[a-z_]+)\"\n",
+                    "        positions: [whole_scalar, whole_placeholder, placeholder_in_text]\n",
+                    "        text_after_name_allowed: true\n",
+                    "        scope_name: LOOP\n",
+                    "        scope_group: null\n",
+                    "        name_group: name\n",
+                    "      - pattern: \"^(?<name>[a-z_]+)$\"\n",
+                ),
+                1,
+            ),
+    );
+    workspace.write(
+        "mock.schema.json",
+        r#"{
+  "type": "object",
+  "x-yaml-dsl-functions": {
+    "loop": {
+      "arguments": [
+        {"name": "in", "type": "any", "required": true, "repeated": false},
+        {"name": "body", "type": "any", "required": true, "repeated": false},
+        {"name": "for", "type": "list", "required": false, "repeated": false, "default": ["it"]}
+      ],
+      "macro": {"kind": "loop", "loop_variables": "for", "collection": "in", "body": "body"}
+    }
+  }
+}"#,
+    );
+    workspace.write(
+        "stacks/dev/mock-dsl.yml",
+        concat!(
+            "queue:\n  name mock-orders:\n    visibility: 60\n",
+            "outputs:\n",
+            "  subnet_cidrs fn.loop:\n",
+            "    in: ref queue.mock_orders.subnets\n",
+            "    body:\n      - ~it.cidr_block\n",
+            "  subnet_names fn.loop:\n",
+            "    for: [index, subnet]\n",
+            "    in: ref queue.mock_orders.subnets\n",
+            "    body:\n      subnet-${~index}: ~subnet.name\n",
+            "  queue_arns fn.loop:\n",
+            "    for: [module]\n",
+            "    in: ref queue.mock_orders.subnets\n",
+            "    body:\n      - [~module.id, ref queue.mock_orders.arn]\n",
+            "  subnet_facts fn.loop:\n",
+            "    in: ref queue.mock_orders.subnets\n",
+            "    body:\n",
+            "      ${~it.id}-cidr: ~it.cidr_block\n",
+            "      ${~it.id}-zone: ~it.zone\n",
+        ),
+    );
+    let output = workspace.run(&["--no-color", "--stack", "stacks/dev"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let main = workspace.read("stacks/dev/main.tf");
+    assert!(
+        main.contains("value = [for it in module.queue_mock_orders.subnets : it.cidr_block]"),
+        "{main}"
+    );
+    assert!(
+        main.contains(concat!(
+            "  value = {\n",
+            "    for index, subnet in module.queue_mock_orders.subnets : ",
+            "\"subnet-${index}\" => subnet.name\n",
+            "  }\n"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(concat!(
+            "  value = [\n",
+            "    for module_ in module.queue_mock_orders.subnets : ",
+            "[module_.id, module.queue_mock_orders.arn]\n",
+            "  ]\n"
+        )),
+        "{main}"
+    );
+    assert!(
+        main.contains(concat!(
+            "output \"subnet_facts\" {\n",
+            "  value = {\n",
+            "    for entry in flatten(\n",
+            "      [\n",
+            "        for it in module.queue_mock_orders.subnets : [\n",
+            "          for k, v in { \"${it.id}-cidr\" = it.cidr_block, \"${it.id}-zone\" = it.zone } : {\n",
+            "            k = k\n",
+            "            v = v\n",
+            "          }\n",
+            "        ]\n",
+            "      ],\n",
+            "    ) : entry.k => entry.v\n",
+            "  }\n",
+            "}\n",
+        )),
+        "{main}"
+    );
+}
+
+#[test]
 fn a_problem_is_drawn_from_the_layer_file_that_holds_it() {
     let workspace = MockWorkspace::new("layer-attribution");
     one_module_workspace(&workspace);

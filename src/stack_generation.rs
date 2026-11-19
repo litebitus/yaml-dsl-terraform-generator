@@ -10,7 +10,7 @@ use yaml_dsl_compiler::{
     BuiltinValues, Compiler, ResolveOptions, ResolvedUnit, TargetLanguage, Unit,
 };
 use yaml_dsl_spec::json_path::PathStep;
-use yaml_dsl_spec::resolved::{Declared, MapEntry, Value, ValueKind};
+use yaml_dsl_spec::resolved::{Declared, LoopBody, MapEntry, Value, ValueKind};
 use yaml_dsl_spec::{Diagnostic, Position};
 
 use crate::config_files::{
@@ -596,6 +596,16 @@ fn collect_call_files(value: &Value, files: &mut Vec<String>) {
         ValueKind::Map(entries) => entries
             .iter()
             .for_each(|entry| collect_call_files(&entry.value, files)),
+        ValueKind::Loop(left) => {
+            collect_call_files(&left.collection, files);
+            match &left.body {
+                LoopBody::Item(item) => collect_call_files(item, files),
+                LoopBody::Entries(entries) => entries.iter().for_each(|entry| {
+                    collect_call_files(&entry.key, files);
+                    collect_call_files(&entry.value, files);
+                }),
+            }
+        }
         _ => {}
     }
 }

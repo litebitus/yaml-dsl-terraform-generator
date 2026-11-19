@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Generation
+  - A loop over a value known only at plan, such as a reference, is written as a `for` expression.
+
 ## v0.1.1 — 2026-11-13
 
 ### Fixed

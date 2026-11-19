@@ -473,6 +473,10 @@ module "queue_mock_orders" {
 | a builtin with a value, such as `${env}` | the value `builtin_values` gives it |
 | a local | the `references` template of its scope, such as `local.{{reference.name}}{{reference.path}}`; the local itself is written by a block, like any part of the document |
 | a call | a Terraform call of the same function, its arguments written the same way |
+| a loop left for the target | a `for` expression: `[for it in <collection> : <item>]` for a list body, `{for key, item in <collection> : <key> => <value>}` for a map body of one entry, and every pass's entries flattened into one map for a map body of several |
+| a loop variable | its `for` symbol, with the reference's path after it |
+
+- A loop variable's symbol is its name, with `_` added until it hides nothing the loop's body reads, such as `module_` for a variable `module` beside a `module.` reference.
 
 ## Templates a stack takes
 

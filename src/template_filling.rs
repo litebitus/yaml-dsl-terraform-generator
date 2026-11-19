@@ -72,18 +72,19 @@ pub fn fill_expression(
 ) -> Result<Expression, Diagnostic> {
     let mut sentinels = Sentinels::default();
     let filled = fill_text(&template.text, template, frame, writer, &mut sentinels)?.text;
-    let wrapped = format!("{EXPRESSION_ATTRIBUTE} = {filled}\n");
-    let body = hcl_edit::parser::parse_body(&wrapped).map_err(|error| {
-        Diagnostic::at(
-            &template.start,
-            format!("`{filled}` is not an HCL expression: {}", error.message()),
-        )
-    })?;
-    let attribute = body.get_attribute(EXPRESSION_ATTRIBUTE).ok_or_else(|| {
-        Diagnostic::at(&template.start, format!("`{filled}` is not one expression"))
-    })?;
-    expression(&attribute.value, &sentinels)
+    parse_expression(&filled, &sentinels)
         .map_err(|message| Diagnostic::at(&template.start, message))
+}
+
+/// `text` read as one HCL expression.
+pub fn parse_expression(text: &str, sentinels: &Sentinels) -> Result<Expression, String> {
+    let wrapped = format!("{EXPRESSION_ATTRIBUTE} = {text}\n");
+    let body = hcl_edit::parser::parse_body(&wrapped)
+        .map_err(|error| format!("`{text}` is not an HCL expression: {}", error.message()))?;
+    let attribute = body
+        .get_attribute(EXPRESSION_ATTRIBUTE)
+        .ok_or_else(|| format!("`{text}` is not one expression"))?;
+    expression(&attribute.value, sentinels)
 }
 
 /// Checks a template's refs to the roots whose fields tfgen fixes, `each` and
