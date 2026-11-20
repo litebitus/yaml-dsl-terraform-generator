@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Generation
+  - A declaration whose merge is left for Terraform keeps the field its key sets, as one of the merge's own fields, through yaml-dsl-compiler 0.1.9.
+
 ## v0.1.2 — 2026-11-19
 
 - Generation

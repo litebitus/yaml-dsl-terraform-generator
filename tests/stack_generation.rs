@@ -637,6 +637,66 @@ fn a_loop_over_a_value_known_at_plan_is_written_as_a_for_expression() {
 }
 
 #[test]
+fn a_merge_left_for_the_target_keeps_the_field_its_declaring_key_sets() {
+    let workspace = MockWorkspace::new("merge-left-for-target");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "yaml-dsl.yml",
+        &DSL_CONFIG.replacen(
+            "    locals: { scope_name: local, path_separator: \".\" }\n",
+            concat!(
+                "    locals: { scope_name: local, path_separator: \".\" }\n",
+                "    function:\n",
+                "      definitions: [schema]\n",
+                "      call_result_reference_positions: [whole_scalar]\n",
+                "      calls_not_allowed_at: []\n",
+                "      marker_function:\n",
+                "        call_marker: fn.\n",
+                "        splat_operator: \"*\"\n",
+                "        calls_without_name_allowed: true\n",
+            ),
+            1,
+        ),
+    );
+    workspace.write(
+        "mock.schema.json",
+        r#"{
+  "type": "object",
+  "x-yaml-dsl-functions": {
+    "encode": {
+      "arguments": [{"name": "value", "type": "any", "required": true, "repeated": false}]
+    },
+    "merge": {
+      "arguments": [{"name": "contents", "type": "any", "required": true, "repeated": true}],
+      "macro": {"kind": "merge", "content": "contents", "merge_behavior": "shallow"}
+    }
+  }
+}"#,
+    );
+    workspace.write(
+        "stacks/dev/mock-dsl.yml",
+        concat!(
+            "locals:\n  policy fn.encode: mock-policy\n",
+            "queue:\n  name mock-orders:\n    fn.merge: local.policy\n    visibility: 60\n",
+        ),
+    );
+    let output = workspace.run(&["--no-color", "--stack", "stacks/dev"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let main = workspace.read("stacks/dev/main.tf");
+    let merge = main
+        .split("merge(local.policy, ")
+        .nth(1)
+        .and_then(|after| after.split(')').next())
+        .unwrap_or_else(|| panic!("no merge of local.policy in {main}"));
+    let own_fields = merge.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(own_fields.contains("name = \"mock-orders\""), "{main}");
+}
+
+#[test]
 fn a_problem_is_drawn_from_the_layer_file_that_holds_it() {
     let workspace = MockWorkspace::new("layer-attribution");
     one_module_workspace(&workspace);
