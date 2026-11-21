@@ -200,6 +200,9 @@ impl MockWorkspace {
         Command::new(env!("CARGO_BIN_EXE_tfgen"))
             .args(arguments)
             .env_remove("TFGEN_SCHEMA")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("COLUMNS")
             .env("XDG_CACHE_HOME", self.root.join(".cache"))
             .envs(variables.iter().copied())
             .current_dir(&self.root)
@@ -755,6 +758,74 @@ fn a_problem_is_drawn_from_the_layer_file_that_holds_it() {
             "2 |   name mock-orders:\n",
         )),
         "{errors}"
+    );
+}
+
+#[test]
+fn a_report_not_on_a_terminal_is_colored_where_clicolor_force_asks_and_no_color_is_unset() {
+    let workspace = MockWorkspace::new("color-variables");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "mock.schema.json",
+        r#"{
+          "type": "object",
+          "properties": {
+            "queue": {
+              "type": "object",
+              "additionalProperties": { "type": "object", "required": ["retention"] }
+            }
+          }
+        }"#,
+    );
+    let colored = |variables: &[(&str, &str)]| {
+        let output = workspace.run_with(&["--stack", "stacks/dev"], variables);
+        assert!(!output.status.success());
+        String::from_utf8_lossy(&output.stderr).contains('\u{1b}')
+    };
+    assert!(colored(&[("CLICOLOR_FORCE", "1")]));
+    assert!(!colored(&[]));
+    assert!(!colored(&[("CLICOLOR_FORCE", "0")]));
+    assert!(!colored(&[("CLICOLOR_FORCE", "1"), ("NO_COLOR", "1")]));
+}
+
+#[test]
+fn a_report_not_on_a_terminal_is_laid_out_to_the_width_columns_states() {
+    let workspace = MockWorkspace::new("columns-variable");
+    one_module_workspace(&workspace);
+    workspace.write(
+        "mock.schema.json",
+        r#"{
+          "type": "object",
+          "properties": {
+            "queue": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["mock-retention-period-for-a-queue-whose-name-is-long-enough-to-wrap"]
+              }
+            }
+          }
+        }"#,
+    );
+    let widest_row = |variables: &[(&str, &str)]| {
+        let output = workspace.run_with(&["--stack", "stacks/dev"], variables);
+        assert!(!output.status.success());
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .map(|row| row.chars().count())
+            .max()
+            .unwrap_or(0)
+    };
+    let unbounded = widest_row(&[]);
+    assert!(unbounded > 40, "the report's widest row is {unbounded}");
+    assert!(widest_row(&[("COLUMNS", "40")]) <= 40);
+
+    let refused = workspace.run_with(&["--stack", "stacks/dev"], &[("COLUMNS", "mock")]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("COLUMNS is a whole number of columns"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
     );
 }
 

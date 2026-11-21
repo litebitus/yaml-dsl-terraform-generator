@@ -12,8 +12,10 @@ pub const USAGE: &str = "usage: tfgen [--stack <directory>]... [--schema <dsl id
 Generates every stack of the repo holding the working directory, or each stack
 --stack names. --schema, and TFGEN_SCHEMA as pairs separated by commas, name the
 schema a DSL's documents are read against for this run, ahead of their modelines.
-Color is on where the output is a terminal and NO_COLOR is unset. `completion`
-prints the shell's completion script.";
+Color is on where the output is a terminal, or the environment variable
+CLICOLOR_FORCE is set, and NO_COLOR is unset; an output that is not a terminal is
+laid out to the width that the environment variable COLUMNS states.
+`completion` prints the shell's completion script.";
 
 pub const COMPLETION_COMMAND: &str = "completion";
 /// The hidden command a completion script calls for a command line's candidates.

@@ -53,6 +53,8 @@ const VERSION: &str = match option_env!("TFGEN_VERSION") {
     None => "dev",
 };
 const NO_COLOR_VARIABLE: &str = "NO_COLOR";
+const CLICOLOR_FORCE_VARIABLE: &str = "CLICOLOR_FORCE";
+const COLUMNS_VARIABLE: &str = "COLUMNS";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -84,11 +86,23 @@ fn main() -> ExitCode {
         }
     };
     let colored = |terminal: bool| {
-        command
-            .color
-            .unwrap_or(terminal && std::env::var_os(NO_COLOR_VARIABLE).is_none())
+        output_colored(
+            command.color,
+            terminal,
+            std::env::var_os(NO_COLOR_VARIABLE).is_some(),
+            std::env::var_os(CLICOLOR_FORCE_VARIABLE)
+                .is_some_and(|forced| !forced.is_empty() && forced != "0"),
+        )
     };
-    let terminal_width = |size: Option<(Width, Height)>| size.map(|(Width(width), _)| width.into());
+    let columns = match columns_variable() {
+        Ok(columns) => columns,
+        Err(message) => {
+            eprintln!("tfgen: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    let terminal_width =
+        |size: Option<(Width, Height)>| size.map(|(Width(width), _)| width.into()).or(columns);
     let styles = OutputStyles {
         output: RenderStyle {
             color: colored(std::io::stdout().is_terminal()),
@@ -173,6 +187,29 @@ impl ErrorPrinter<'_> {
     fn message(&self, message: &str) {
         eprintln!("{}", plain_error(self.style, message));
     }
+}
+
+/// The width `COLUMNS` states for an output that is not a terminal; none where
+/// it is unset or empty.
+fn columns_variable() -> Result<Option<usize>, String> {
+    match std::env::var(COLUMNS_VARIABLE) {
+        Ok(text) if text.is_empty() => Ok(None),
+        Ok(text) => match text.parse::<usize>() {
+            Ok(columns) if columns > 0 => Ok(Some(columns)),
+            _ => Err(format!(
+                "COLUMNS is a whole number of columns, from 1: `{text}`"
+            )),
+        },
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("COLUMNS is a whole number of columns, from 1".to_owned())
+        }
+    }
+}
+
+/// Whether an output is drawn in color, from the flags and the color variables.
+fn output_colored(flag: Option<bool>, terminal: bool, no_color: bool, forced: bool) -> bool {
+    flag.unwrap_or(!no_color && (forced || terminal))
 }
 
 /// Generates the stacks; `false` where any stack has an error.
