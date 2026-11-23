@@ -1336,9 +1336,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "yaml-dsl-compiler"
-version = "0.1.9-snapshot.20261120234936"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "347f7e7076b0d6e821f9e581b4806d887a57c402fcbd49010baf75a6cd385c3e"
+checksum = "c3e1b290d299d57d778c8111bf9f9bf2c40794a0abee0ca7e962ae9e0a0a0d5b"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
