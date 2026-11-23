@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.3 — 2026-11-23
+
 - Output
   - When another tool captures a report, the report keeps its color through the `CLICOLOR_FORCE` environment variable and fits its width through the `COLUMNS` environment variable.
 
