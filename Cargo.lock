@@ -1336,9 +1336,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "yaml-dsl-compiler"
-version = "0.1.9"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e1b290d299d57d778c8111bf9f9bf2c40794a0abee0ca7e962ae9e0a0a0d5b"
+checksum = "57d6a850348c184ce366fb2af9b810ec8d22fb3673bf2efddb2723cc3e87b722"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
@@ -1349,9 +1349,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec"
-version = "0.3.4"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10f23526f2e0e0453125df976bc2c1ddb83001248fa5b5bbfa8d9c40929651bb"
+checksum = "76e0b38db15f73f00dcbf3b2462040efc9a6269f4deb98908fabca8257c11915"
 dependencies = [
  "fancy-regex 0.20.0",
  "jsonschema",
@@ -1363,9 +1363,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-diagnostic-renderer"
-version = "0.3.4"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c806a8f194e42f729ca9f40ccf48857ebe66c087f981589864fb5d3c604d6ef"
+checksum = "0ca3d5b003eb6ae241b63e6fa98aaf4642a1b2c4574b1e7fdc18f844dd9a7648"
 dependencies = [
  "unicode-linebreak",
  "unicode-width",
