@@ -94,6 +94,7 @@ stacks:
 
 - `descriptors` lists the file names a stack's descriptor may have; left out, it is `[stack.tg.hcl]`.
 - A directory holding two of them is an error naming both.
+- A directory holding a `.tgskip` file holds no stack, and nor does any directory under it: a run of every stack and completion leave them out, and `--stack` naming one is an error naming the `.tgskip`.
 
 ```hcl
 globals {

@@ -8,6 +8,9 @@ use std::sync::Arc;
 use crate::config_files::{DSL_CONFIG_FILE, LoadedConfigs, load_config};
 use crate::disk_source::DiskSource;
 
+/// The marker file whose directory, and everything under it, holds no stack.
+const SKIP_MARKER: &str = ".tgskip";
+
 /// The top of the git working tree holding `directory`.
 pub fn repository_root(directory: &Path) -> Result<PathBuf, String> {
     let output = git(directory, &["rev-parse", "--show-toplevel"])?;
@@ -124,8 +127,19 @@ pub fn repository_stacks(
     for directory in &config_directories {
         load_config(configs, directory, source);
     }
+    let skipped_directories: Vec<&Path> = files
+        .iter()
+        .filter(|file| file.file_name().is_some_and(|name| name == SKIP_MARKER))
+        .filter_map(|file| file.parent())
+        .collect();
     let mut candidates = Vec::new();
     for file in &files {
+        if skipped_directories
+            .iter()
+            .any(|skipped| file.starts_with(skipped))
+        {
+            continue;
+        }
         let Some(config_directory) = config_directory_of(file, root, Some(&config_directories))
         else {
             continue;
@@ -166,6 +180,12 @@ pub fn named_stacks(
         if !directory.is_dir() {
             return Err(format!("{argument} is not a directory"));
         }
+        if let Some(marker) = skip_marker_over(&directory, root) {
+            return Err(format!(
+                "{argument} holds no stack: {} skips it",
+                marker.strip_prefix(root).unwrap_or(&marker).display()
+            ));
+        }
         let config_directory = config_directory_of(&directory, root, None)
             .ok_or_else(|| format!("{argument}: no {DSL_CONFIG_FILE} holds this stack"))?;
         load_config(configs, &config_directory, source);
@@ -190,6 +210,15 @@ pub fn named_stacks(
         }
     }
     Ok(candidates)
+}
+
+/// The skip marker in `directory` or a directory above it, inside the repo.
+fn skip_marker_over(directory: &Path, repository_root: &Path) -> Option<PathBuf> {
+    directory
+        .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(repository_root))
+        .map(|ancestor| ancestor.join(SKIP_MARKER))
+        .find(|marker| marker.is_file())
 }
 
 #[cfg(test)]

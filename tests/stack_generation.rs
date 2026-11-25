@@ -440,6 +440,30 @@ fn every_stack_of_the_repo_is_generated_in_both_module_layouts() {
 }
 
 #[test]
+fn a_directory_under_a_tgskip_holds_no_stack() {
+    let workspace = MockWorkspace::new("skipped-tree");
+    one_module_workspace(&workspace);
+    workspace.write("mock-templates/.tgskip", "");
+    workspace.write("mock-templates/mock-stack/stack.tg.hcl", "globals {\n");
+    let output = workspace.run(&["--no-color"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("mock-templates"));
+    assert!(!workspace.exists("mock-templates/mock-stack/main.tf"));
+    let named = workspace.run(&["--no-color", "--stack", "mock-templates/mock-stack"]);
+    assert!(!named.status.success());
+    let errors = String::from_utf8_lossy(&named.stderr);
+    assert!(
+        errors
+            .contains("mock-templates/mock-stack holds no stack: mock-templates/.tgskip skips it"),
+        "{errors}"
+    );
+}
+
+#[test]
 fn a_stack_holding_no_documents_compiles_its_common_layer_alone() {
     let workspace = MockWorkspace::new("holding-no-documents");
     one_module_workspace(&workspace);

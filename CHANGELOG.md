@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Stacks
+  - A directory holding a `.tgskip` file, and everything under it, holds no stack.
+
 ## v0.1.3 — 2026-11-23
 
 - Output
