@@ -73,6 +73,7 @@ impl FixedRoot {
             .map(|(field, value)| MapEntry {
                 key: (*field).to_owned(),
                 key_position: position.clone(),
+                deferred_key: None,
                 value,
             })
             .collect();

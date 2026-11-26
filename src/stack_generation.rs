@@ -297,6 +297,7 @@ fn required_providers(
                 ValueKind::Map(vec![MapEntry {
                     key: "source".to_owned(),
                     key_position: position.clone(),
+                    deferred_key: None,
                     value: Value::string(source.clone(), position.clone()),
                 }]),
                 position.clone(),
@@ -304,6 +305,7 @@ fn required_providers(
             providers.push(MapEntry {
                 key: name.clone(),
                 key_position: position.clone(),
+                deferred_key: None,
                 value: requirement,
             });
         }
@@ -450,7 +452,7 @@ fn compile_document(
                 }));
             }
             resolved.warnings.push(
-                Diagnostic::at(
+                Diagnostic::warning_at(
                     &source.written_at,
                     "a fallback schema accepted the document",
                 )
@@ -841,6 +843,7 @@ fn scope_key_value(scope_key: &str, members: &[&Declared]) -> Value {
                 .map(|declared| MapEntry {
                     key: declared.name.clone(),
                     key_position: declared.key_position.clone(),
+                    deferred_key: None,
                     value: declared.value.clone(),
                 })
                 .collect(),
@@ -930,6 +933,7 @@ fn with_entries(value: &Value, entries: Vec<(&str, Value)>) -> Value {
         merged.push(MapEntry {
             key: key.to_owned(),
             key_position: value.position.clone(),
+            deferred_key: None,
             value: entry_value,
         });
     }

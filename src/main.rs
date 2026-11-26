@@ -30,7 +30,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use terminal_size::{Height, Width, terminal_size_of};
 use yaml_dsl_spec::Diagnostic;
-use yaml_dsl_spec_diagnostic_renderer::{RenderStyle, Severity};
+use yaml_dsl_spec_diagnostic_renderer::RenderStyle;
 
 use crate::command_line::{Request, USAGE, command_line};
 use crate::config_files::{
@@ -160,25 +160,13 @@ struct ErrorPrinter<'r> {
 
 impl ErrorPrinter<'_> {
     fn diagnostic(&mut self, diagnostic: &Diagnostic) {
-        let shown = report(
-            diagnostic,
-            Severity::Error,
-            self.root,
-            self.style,
-            &mut self.sources,
-        );
+        let shown = report(diagnostic, self.root, self.style, &mut self.sources);
         eprintln!("{shown}\n");
     }
 
     /// Each warning once, however many stacks read what it is about.
     fn warning(&mut self, warning: &Diagnostic) {
-        let shown = report(
-            warning,
-            Severity::Warning,
-            self.root,
-            self.style,
-            &mut self.sources,
-        );
+        let shown = report(warning, self.root, self.style, &mut self.sources);
         if self.warned.insert(shown.clone()) {
             eprintln!("{shown}\n");
         }

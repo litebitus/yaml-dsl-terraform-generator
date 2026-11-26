@@ -476,6 +476,7 @@ module "queue_mock_orders" {
 | a call | a Terraform call of the same function, its arguments written the same way |
 | a loop left for the target | a `for` expression: `[for it in <collection> : <item>]` for a list body, `{for key, item in <collection> : <key> => <value>}` for a map body of one entry, and every pass's entries flattened into one map for a map body of several |
 | a loop variable | its `for` symbol, with the reference's path after it |
+| a deferred key | the expression it reads as a key: a reference in parentheses, `(module.queue_orders.arn) = …`, and text holding a reference as an interpolated string, `"mock-${local.name}" = …` |
 
 - A loop variable's symbol is its name, with `_` added until it hides nothing the loop's body reads, such as `module_` for a variable `module` beside a `module.` reference.
 

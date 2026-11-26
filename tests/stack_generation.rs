@@ -664,6 +664,47 @@ fn a_loop_over_a_value_known_at_plan_is_written_as_a_for_expression() {
 }
 
 #[test]
+fn a_deferred_key_is_written_as_the_expression_it_reads() {
+    let workspace = MockWorkspace::new("deferred-keys");
+    one_module_workspace(&workspace);
+    workspace.write("yaml-dsl.yml", DSL_CONFIG);
+    workspace.write("mock.schema.json", r#"{"type": "object"}"#);
+    workspace.write(
+        "stacks/dev/mock-dsl.yml",
+        concat!(
+            "locals:\n  dead_arn: ref queue.mock_dead.arn\n",
+            "queue:\n",
+            "  name mock-orders:\n    visibility: 60\n",
+            "  name mock-dead:\n    visibility: 30\n",
+            "outputs:\n",
+            "  queue_names:\n",
+            "    ref queue.mock_orders.arn: mock-orders\n",
+            "    mock-${local.dead_arn}: mock-dead\n",
+            "    mock-${env}: mock-plain\n",
+        ),
+    );
+    let output = workspace.run(&["--no-color", "--stack", "stacks/dev"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let main = workspace.read("stacks/dev/main.tf");
+    assert!(
+        main.contains(concat!(
+            "output \"queue_names\" {\n",
+            "  value = {\n",
+            "    (module.queue_mock_orders.arn) = \"mock-orders\"\n",
+            "    \"mock-${local.dead_arn}\"       = \"mock-dead\"\n",
+            "    mock-dev                       = \"mock-plain\"\n",
+            "  }\n",
+            "}\n",
+        )),
+        "{main}"
+    );
+}
+
+#[test]
 fn a_merge_left_for_the_target_keeps_the_field_its_declaring_key_sets() {
     let workspace = MockWorkspace::new("merge-left-for-target");
     one_module_workspace(&workspace);

@@ -68,6 +68,7 @@ pub fn evaluate_node(node: &Node, frame: &RefFrame<'_>) -> Result<Option<Value>,
                 values.push(MapEntry {
                     key,
                     key_position: entry.key_position.clone(),
+                    deferred_key: None,
                     value,
                 });
             }

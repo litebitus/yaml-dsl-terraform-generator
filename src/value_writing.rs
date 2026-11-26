@@ -130,10 +130,18 @@ impl<'w> ValueWriter<'w> {
                 entries
                     .iter()
                     .map(|entry| {
-                        Ok((
-                            ObjectKey::Name(entry.key.clone()),
-                            self.expression(&entry.value)?,
-                        ))
+                        let key = match &entry.deferred_key {
+                            Some(deferred_key) => match self.expression(deferred_key)? {
+                                template @ Expression::Template(_) => {
+                                    ObjectKey::Expression(template)
+                                }
+                                read => {
+                                    ObjectKey::Expression(Expression::Parenthesis(Box::new(read)))
+                                }
+                            },
+                            None => ObjectKey::Name(entry.key.clone()),
+                        };
+                        Ok((key, self.expression(&entry.value)?))
                     })
                     .collect::<Result<_, Diagnostic>>()?,
             ),

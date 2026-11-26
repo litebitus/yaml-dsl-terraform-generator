@@ -6,9 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use yaml_dsl_spec::Diagnostic;
-use yaml_dsl_spec_diagnostic_renderer::{
-    DiagnosticSource, RenderStyle, Severity, render_diagnostic,
-};
+use yaml_dsl_spec_diagnostic_renderer::{DiagnosticSource, RenderStyle, render_diagnostic};
 
 use crate::generated_files::FileChange;
 
@@ -51,12 +49,7 @@ pub fn changed_stacks(changed: usize, compared: usize) -> String {
 
 /// An error with no source to show.
 pub fn plain_error(style: RenderStyle, message: &str) -> String {
-    render_diagnostic(
-        &Diagnostic::unplaced(message),
-        Severity::Error,
-        UNPLACED_SOURCE,
-        style,
-    )
+    render_diagnostic(&Diagnostic::unplaced(message), UNPLACED_SOURCE, style)
 }
 
 /// The line closing a stack's errors.
@@ -90,7 +83,6 @@ impl SourceFiles {
 /// A diagnostic as the renderer draws it, its source the file it is placed in.
 pub fn report(
     diagnostic: &Diagnostic,
-    severity: Severity,
     root: &Path,
     style: RenderStyle,
     sources: &mut SourceFiles,
@@ -99,7 +91,7 @@ pub fn report(
         Some(position) => sources.source(&position.file, root),
         None => UNPLACED_SOURCE,
     };
-    render_diagnostic(diagnostic, severity, source, style)
+    render_diagnostic(diagnostic, source, style)
 }
 
 /// The help naming the candidate spelt closest to a name, where one is close
@@ -149,13 +141,7 @@ mod tests {
         let diagnostic = Diagnostic::at(&Position::new(&file, 2, 3), "`brnch` is not a field")
             .with_help(did_you_mean("brnch", &["branch".to_owned()]));
         let root = scratch.0.parent().unwrap().to_path_buf();
-        let text = report(
-            &diagnostic,
-            Severity::Error,
-            &root,
-            PLAIN,
-            &mut SourceFiles::default(),
-        );
+        let text = report(&diagnostic, &root, PLAIN, &mut SourceFiles::default());
         assert_eq!(
             text,
             concat!(
@@ -174,10 +160,9 @@ mod tests {
     #[test]
     fn an_unreadable_file_shows_its_place_and_no_source_lines() {
         let file: Arc<str> = Arc::from("/mock-root/missing/mock-dsl.yml");
-        let diagnostic = Diagnostic::at(&Position::new(&file, 4, 1), "mock problem");
+        let diagnostic = Diagnostic::warning_at(&Position::new(&file, 4, 1), "mock problem");
         let text = report(
             &diagnostic,
-            Severity::Warning,
             Path::new("/mock-root"),
             PLAIN,
             &mut SourceFiles::default(),

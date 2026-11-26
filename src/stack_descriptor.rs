@@ -79,6 +79,7 @@ fn set_global(
                 entries.push(MapEntry {
                     key: label.clone(),
                     key_position: key_position.clone(),
+                    deferred_key: None,
                     value: Value::new(ValueKind::Map(Vec::new()), key_position.clone()),
                 });
                 entries.len() - 1
@@ -91,6 +92,7 @@ fn set_global(
         entries.push(MapEntry {
             key: key.to_owned(),
             key_position,
+            deferred_key: None,
             value,
         });
     }
@@ -125,6 +127,7 @@ fn literal(expression: &Expression, lines: &LineIndex) -> Result<Value, Diagnost
                 entries.push(MapEntry {
                     key: key_text,
                     key_position: lines.position(key.span().map_or(0, |span| span.start)),
+                    deferred_key: None,
                     value: literal(value.expr(), lines)?,
                 });
             }
