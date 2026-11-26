@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.0 — 2026-11-26
+
 - Generation
   - A loop body's key that reads no loop variable is reported as a warning, through yaml-dsl-compiler 0.2.1.
   - A deferred key is written as the expression it reads: a reference in parentheses, and text holding a reference as an interpolated string.
