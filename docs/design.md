@@ -558,10 +558,11 @@ A function is called in a key, `<name> fn.<function>:` for one argument and `<na
 
 | Verb | Writes its operand |
 |---|---|
-| `%u` | upper-cased |
-| `%l` | lower-cased |
 | `%A` | with each `/` as `_` |
 | `%B` | whole where it fits the precision, else `-` and its last characters, one fewer than the precision |
+| `%D` | with each `-` as `_` |
+| `%l` | lower-cased |
+| `%u` | upper-cased |
 
 ## Command line
 

@@ -54,7 +54,7 @@
   },
   "x-yaml-dsl-functions": {
     "format": {
-      "description": "Fills the layout's verbs with the operands, in order: Go's printing verbs, and `%u` upper-cased, `%l` lower-cased, `%A` with each `/` as `_`, `%B` whole where it fits the precision, else `-` and its last characters, one fewer than the precision.",
+      "description": "Fills the layout's verbs with the operands, in order: Go's printing verbs, and these:\n\n- `%A` with each `/` as `_`\n- `%B` whole where it fits the precision, else `-` and its last characters, one fewer than the precision\n- `%D` with each `-` as `_`\n- `%l` lower-cased\n- `%u` upper-cased",
       "arguments": [
         { "name": "layout", "type": "text", "required": true, "repeated": false, "description": "The text holding the verbs." },
         { "name": "operands", "type": "any", "required": false, "repeated": true, "description": "The values the verbs write, in order." }

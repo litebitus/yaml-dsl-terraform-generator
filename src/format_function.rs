@@ -101,6 +101,7 @@ fn verb_text(verb: char, operand: &str, directive: &Directive) -> Result<String,
         'u' => directive.truncated(&operand.to_uppercase()),
         'l' => directive.truncated(&operand.to_lowercase()),
         'A' => directive.truncated(&operand.replace('/', "_")),
+        'D' => directive.truncated(&operand.replace('-', "_")),
         'B' => {
             let precision = directive
                 .precision
@@ -188,12 +189,13 @@ mod tests {
     }
 
     #[test]
-    fn tfgen_verbs_case_slash_and_cut_from_the_left() {
+    fn tfgen_verbs_case_slash_dash_and_cut_from_the_left() {
         assert_eq!(format("%u %l", &["mock", "MOCK"]).unwrap(), "MOCK mock");
         assert_eq!(
             format("mock_%A", &["k8s/apps/build"]).unwrap(),
             "mock_k8s_apps_build"
         );
+        assert_eq!(format("mock_%D", &["us-west-2"]).unwrap(), "mock_us_west_2");
         assert_eq!(format("%.8B", &["abcdefgh"]).unwrap(), "abcdefgh");
         assert_eq!(format("%.8B", &["abcdefghij"]).unwrap(), "-defghij");
     }
