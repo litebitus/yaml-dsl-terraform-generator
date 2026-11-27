@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.0 — 2026-11-27
+
 - Schemas
   - A document's schema is found and read by the YAML DSL standard's schema resolution: a schema not there moves the search on, and an S3 object is read with the AWS SDK, without the `aws` command.
   - A warning from finding a schema is placed where the schema was named.
