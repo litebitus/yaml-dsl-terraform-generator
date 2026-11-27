@@ -11,6 +11,7 @@ use yaml_dsl_compiler::{
 };
 use yaml_dsl_spec::json_path::PathStep;
 use yaml_dsl_spec::resolved::{Declared, LoopBody, MapEntry, Value, ValueKind};
+use yaml_dsl_spec::schema::SchemaCache;
 use yaml_dsl_spec::{Diagnostic, Position};
 
 use crate::config_files::{
@@ -21,7 +22,6 @@ use crate::generated_files::header_comment;
 use crate::ref_scope::{
     FixedRoot, GeneratorContext, RefFrame, SelectableDeclaration, StackContext,
 };
-use crate::schema_cache::SchemaCache;
 use crate::schema_lookup::{SchemaSource, StackSchemas, ValidationFallback};
 use crate::schema_overrides::SchemaOverrides;
 use crate::stack_discovery::git_files;
@@ -421,13 +421,12 @@ fn compile_document(
         Some(schema) => Some(run_schema_of(schema, &frame).map_err(|diagnostic| vec![diagnostic])?),
         None => None,
     };
-    let schemas = StackSchemas {
+    let schemas = StackSchemas::new(
         config_root,
-        run_schema: run_schema.as_deref(),
-        search_paths: generator_schema.as_deref().unwrap_or(&dsl.search_paths),
+        run_schema.as_deref(),
+        generator_schema.as_deref().unwrap_or(&dsl.search_paths),
         schema_cache,
-        fallback_source: None,
-    };
+    );
     let builtins = StackBuiltins(builtins);
     let options = ResolveOptions {
         builtins: Some(&builtins),
@@ -439,7 +438,7 @@ fn compile_document(
             rejections: Vec::new(),
         },
         Err(problems) if generator.validation_fallback_to_remote_schemas => {
-            let fallback = schemas.validation_fallback(unit);
+            let fallback = schemas.validation_fallback();
             let Some((mut resolved, source)) =
                 first_fallback_acceptance(compiler, unit, &schemas, &fallback, &builtins)
             else {
@@ -490,10 +489,7 @@ fn first_fallback_acceptance<'s>(
     builtins: &StackBuiltins,
 ) -> Option<(ResolvedUnit, &'s SchemaSource)> {
     fallback.remote_sources.iter().copied().find_map(|source| {
-        let fallback_schemas = StackSchemas {
-            fallback_source: Some(source),
-            ..*schemas
-        };
+        let fallback_schemas = schemas.reading_fallback(source);
         let options = ResolveOptions {
             builtins: Some(builtins),
             schema_provider: Some(&fallback_schemas),

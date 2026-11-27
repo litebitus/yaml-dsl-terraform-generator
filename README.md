@@ -87,7 +87,7 @@ version: "1.0"
 
 | Target | Does |
 |---|---|
-| `make test` | format check, clippy with warnings as errors, every test |
+| `make test` | format check, clippy with warnings as errors, every test, the S3 ones against a Moto server in Docker |
 | `make build` | `make test`, then a release build |
 | `make completion` | `make build`, then installs its zsh completion into `~/.zsh/completions` (`COMPLETION_DIR` to override), for `tfgen` and `./target/release/tfgen` |
 | `make completion-clean` | removes it, so a brew-installed tfgen's completion takes over |

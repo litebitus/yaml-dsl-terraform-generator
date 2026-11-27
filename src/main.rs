@@ -9,8 +9,6 @@ mod generated_files;
 mod hcl_conversion;
 mod ref_paths;
 mod ref_scope;
-mod schema_cache;
-mod schema_credentials;
 mod schema_lookup;
 mod schema_overrides;
 mod shell_completion;
@@ -23,6 +21,7 @@ mod yaml_values;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -30,7 +29,10 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use terminal_size::{Height, Width, terminal_size_of};
 use yaml_dsl_spec::Diagnostic;
+use yaml_dsl_spec::schema::{SchemaCache, SchemaFolderStore};
 use yaml_dsl_spec_diagnostic_renderer::RenderStyle;
+use yaml_dsl_spec_schema_reader_github::GithubSchemaReader;
+use yaml_dsl_spec_schema_reader_s3::S3SchemaReader;
 
 use crate::command_line::{Request, USAGE, command_line};
 use crate::config_files::{
@@ -39,7 +41,7 @@ use crate::config_files::{
 use crate::disk_source::DiskSource;
 use crate::error_report::{SourceFiles, plain_error, report, stack_changes, stack_summary};
 use crate::generated_files::{FileChange, write_stack_files};
-use crate::schema_cache::{SchemaCache, schema_cache_directory};
+use crate::schema_lookup::schema_cache_directory;
 use crate::schema_overrides::{SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, variable_pairs};
 use crate::shell_completion::candidates;
 use crate::stack_descriptor::{TFGEN_GLOBAL, read_globals};
@@ -55,6 +57,8 @@ const VERSION: &str = match option_env!("TFGEN_VERSION") {
 const NO_COLOR_VARIABLE: &str = "NO_COLOR";
 const CLICOLOR_FORCE_VARIABLE: &str = "CLICOLOR_FORCE";
 const COLUMNS_VARIABLE: &str = "COLUMNS";
+/// The session an S3 schema's `assume_role` role is assumed under.
+const ROLE_SESSION_NAME: &str = "tfgen";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -125,14 +129,7 @@ fn main() -> ExitCode {
         }
         None => Vec::new(),
     };
-    let working_directory = match std::env::current_dir() {
-        Ok(directory) => directory,
-        Err(error) => {
-            eprintln!("tfgen: the working directory: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let overrides = schema_overrides(&variable, &command.schemas, &working_directory);
+    let overrides = schema_overrides(&variable, &command.schemas);
     match run(&command.stacks, &overrides, styles) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
@@ -234,7 +231,15 @@ fn run(
         .map(LoadedConfig::schema_cache_capacity)
         .max()
         .unwrap_or(DEFAULT_SCHEMA_CACHE_CAPACITY);
-    let schema_cache = SchemaCache::new(schema_cache_directory(), schema_cache_capacity);
+    let schema_store = SchemaFolderStore::new(
+        schema_cache_directory(),
+        NonZeroUsize::new(schema_cache_capacity)
+            .expect("`schema_cache_capacity` is read as a whole number from 1"),
+    );
+    let schema_cache = SchemaCache::default()
+        .with_store(Arc::new(schema_store))
+        .with_url_reader(Arc::new(S3SchemaReader::new(ROLE_SESSION_NAME)))
+        .with_url_reader(Arc::new(GithubSchemaReader::new()));
     let mut succeeded = true;
     for (directory, result) in &configs {
         if let Err(diagnostics) = result {
@@ -299,7 +304,6 @@ fn run(
         });
     }
     let results: Vec<_> = jobs.par_iter().map(generate_stack).collect();
-    schema_cache.drop_least_recently_used();
     let mut changed_stacks: Vec<(String, Vec<(String, FileChange)>)> = Vec::new();
     let mut compared = 0;
     for (job, result) in jobs.iter().zip(results) {

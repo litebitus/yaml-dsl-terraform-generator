@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Schemas
+  - A document's schema is found and read by the YAML DSL standard's schema resolution: a schema not there moves the search on, and an S3 object is read with the AWS SDK, without the `aws` command.
+  - An S3 URL is read with the machine's credentials only where it carries `yaml_dsl_machine_credentials=true`, as any schema URL is.
+  - A warning from finding a schema is placed where the schema was named.
+
 ## v0.2.0 — 2026-11-26
 
 - Generation

@@ -255,21 +255,18 @@ output "orders_url" {
 
 ### Schema
 
-`tfgen` finds and reads every document's schema and hands it to the compiler, which is pure code and reads none itself. A document is compiled against the schema the editor reads for it, found in this order:
+`tfgen` finds and reads every document's schema and hands it to the compiler, which is pure code and reads none itself. A document is compiled against:
 
-1. the schema named for the run, by `--schema` or `TFGEN_SCHEMA`, with refs filled for the stack, for working on a schema locally or reading one a run's environment reaches;
-2. its modeline, when the path it names is on disk, or when it names a URL;
-3. the generator's `schema`, a list in `schema_search_paths`' grammar with refs filled for the stack, the first entry found taken;
-4. the DSL's `schema_search_paths`, for a generator with no `schema`.
+1. the schema named for the run, by `--schema` or `TFGEN_SCHEMA`, with refs filled for the stack, for working on a schema locally or reading one a run's environment reaches; a path is read from the working directory;
+2. else the schema its modeline names, then the generator's `schema`, a list in `schema_search_paths`' grammar with refs filled for the stack, or the DSL's `schema_search_paths` for a generator with no `schema`.
 
-A path is relative to the document, or to the config's folder when it starts with `{config_root}`, and a search path's steps may hold `*`, matching within one step, the first file in path order taken. A modeline's path is the path it writes.
+The schema is found and read by the YAML DSL standard's schema resolution, the schema the editor reads for the document: [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/spec.md) under Finding the schema and Schema URLs, built as its [package design](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/package-design.md) states under Schema resolution.
 
-A URL is read by the YAML DSL standard's rules for schema URLs, [yaml-dsl-spec](https://github.com/litebitus/yaml-dsl-spec/blob/main/docs/spec.md) under Schema URLs: `yaml_dsl_max_age_days`, the check with `ETag` and `Last-Modified`, the kept copy when the source does not answer, and the read without credentials first, with the machine's credentials only where the link carries `yaml_dsl_machine_credentials=true` and that read is refused. Its copies are kept in the schema cache, in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-cache`, else `~/Library/Caches/tfgen/schema-cache` on macOS and `~/.cache/tfgen/schema-cache` elsewhere.
-
-`tfgen` also reads an S3 object, `s3://<bucket>/<key>`, or `s3://<bucket>/<key>?assume_role=<role ARN>`, through the AWS command line, `aws s3api get-object`, always with the machine's AWS credentials: `AWS_PROFILE` and the other variables, `~/.aws` profiles with SSO, or a role. With `assume_role`, it reads as that role, assumed first with `aws sts assume-role`.
-
-- A refused credential gives way to the next. Every credential refused before one is let in, or all of them with the kept copy read instead, is a warning naming where the credential came from and what renews it, such as `run aws sso login`. All refused with no kept copy is an error placed at the entry or modeline that named the link, with each refusal's reason and the fixes as its help; for a link `--schema` or `TFGEN_SCHEMA` names, the error names them.
-- A GitHub token is asked for once per run, so a renewed login is read on the next.
+- A schema that is not there moves the search on to the next; one that is there and does not read is an error at the modeline or the entry that named it, and for a schema `--schema` or `TFGEN_SCHEMA` names, the error names them.
+- `tfgen` reads `file`, `http` and `https` URLs, GitHub links with the GitHub schema reader, and S3 objects with the S3 schema reader, a role an S3 URL's `assume_role` names assumed under the session `tfgen`.
+- A URL is read without credentials first, and with the machine's only where it carries `yaml_dsl_machine_credentials=true`.
+- A warning, such as a credential refused before another is let in, is placed where the schema was named.
+- Copies of remote schemas, and what the compiler prepares from each schema, are kept in the schema cache, in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-cache`, else `~/Library/Caches/tfgen/schema-cache` on macOS and `~/.cache/tfgen/schema-cache` elsewhere.
 - Stacks generated at once that read the same URL read it once: the first fetches it and keeps its copy, and the others wait for it and read that copy.
 
 A schema published with each release of the modules a stack pins takes two entries: the copy a stack's own `terraform init` keeps, and the release asset, for a stack not initialized yet:
@@ -285,10 +282,10 @@ An S3 bucket serves the same way, a key per release, read as a role where the ma
 ```yaml
 schema:
   - .terraform/modules/*/mock.schema.json
-  - "s3://mock-schemas/mock-modules/{{stack.modules_version}}/mock.schema.json?assume_role={{tfgen.mock_role}}"
+  - "s3://mock-schemas/mock-modules/{{stack.modules_version}}/mock.schema.json?assume_role={{tfgen.mock_role}}&yaml_dsl_machine_credentials=true"
 ```
 
-The list is a presence test: the first entry found is the schema. A generator with `validation_fallback_to_remote_schemas: true` adds a validation fallback: when the schema found rejects the document, it is compiled again against the list's remote schemas (S3 and HTTP) after that schema, in order, the first that accepts it taken. When none accepts it, its problems are reported against the schema found.
+The list is a presence test: the first entry found is the schema. A generator with `validation_fallback_to_remote_schemas: true` adds a validation fallback: when the schema found rejects the document, it is compiled again against the list's remote schemas (any URL but a `file` one) after that schema, in order, the first that accepts it taken. When none accepts it, its problems are reported against the schema found.
 
 - A local file the modeline names falls back to every remote schema of the list.
 - Local entries are skipped. A local schema is a copy, as current as whatever last wrote it, and the copies a document reaches are written together, so only a schema read from its source can accept what one of them rejects.
@@ -616,7 +613,7 @@ A run's cost grows with the stacks it compiles and never with the size of the re
 
 `tfgen.yml`'s `performance`, from format 1.1, tunes a run:
 
-- `schema_cache_capacity` is how many schemas the schema cache keeps, a whole number from 1, its default stated in the schema. After a run, the least recently used schemas beyond it are dropped. A run reading several config folders keeps the largest capacity among them.
+- `schema_cache_capacity` is how many entries the schema cache keeps, a whole number from 1, its default stated in the schema: a remote schema's copy and what is prepared from a schema are an entry each. Past it, the least recently used entries are dropped. A run reading several config folders keeps the largest capacity among them.
 
 ## Release
 

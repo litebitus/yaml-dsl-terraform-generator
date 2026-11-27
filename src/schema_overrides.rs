@@ -2,15 +2,12 @@
 //! `TFGEN_SCHEMA`, then `--schema`, a flag winning for the DSL it names.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-
-use crate::schema_cache::is_schema_url;
 
 pub const SCHEMA_VARIABLE: &str = "TFGEN_SCHEMA";
 const PAIR_SEPARATOR: char = ',';
 
-/// By DSL id, the schema a run reads that DSL's documents against: an absolute
-/// path or a URL.
+/// By DSL id, the schema a run reads that DSL's documents against: a path, read
+/// from the working directory, or a URL.
 pub type SchemaOverrides = BTreeMap<String, String>;
 
 /// A `<dsl id>=<path or URL>` pair.
@@ -35,28 +32,12 @@ pub fn variable_pairs(value: &str) -> Result<Vec<(String, String)>, String> {
         .map_err(|message| format!("{SCHEMA_VARIABLE}: {message}"))
 }
 
-/// The run's schemas, the flags' pairs over the variable's, a path made absolute
-/// from the working directory.
+/// The run's schemas, the flags' pairs over the variable's.
 pub fn schema_overrides(
     variable: &[(String, String)],
     flags: &[(String, String)],
-    working_directory: &Path,
 ) -> SchemaOverrides {
-    variable
-        .iter()
-        .chain(flags)
-        .map(|(dsl_id, schema)| {
-            let schema = if is_schema_url(schema) {
-                schema.clone()
-            } else {
-                working_directory
-                    .join(schema)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            (dsl_id.clone(), schema)
-        })
-        .collect()
+    variable.iter().chain(flags).cloned().collect()
 }
 
 #[cfg(test)]
@@ -68,19 +49,19 @@ mod tests {
     }
 
     #[test]
-    fn a_flag_wins_over_the_variable_and_a_path_is_made_absolute() {
+    fn a_flag_wins_over_the_variable() {
         let variable = variable_pairs(
             "mock-dsl=../schemas/a.json, other=https://mock.example/b.json, \
              bucket=s3://mock-bucket/c.json",
         )
         .unwrap();
         let flags = vec![pair("mock-dsl", "c.json")];
-        let overrides = schema_overrides(&variable, &flags, Path::new("/work"));
+        let overrides = schema_overrides(&variable, &flags);
         assert_eq!(
             overrides,
             SchemaOverrides::from([
                 pair("bucket", "s3://mock-bucket/c.json"),
-                pair("mock-dsl", "/work/c.json"),
+                pair("mock-dsl", "c.json"),
                 pair("other", "https://mock.example/b.json"),
             ])
         );

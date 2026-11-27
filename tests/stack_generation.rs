@@ -1100,52 +1100,45 @@ fn a_fallback_that_passes_reports_the_failure_without_its_help_and_the_schema_us
     assert!(errors.contains("--> per-component/tfgen.yml:"), "{errors}");
 }
 
-/// The AWS command line's answer to `s3api get-object`: the accepting schema for
-/// the key `accepting.schema.json`, the rejecting one for any other.
-const AWS_ANSWERING: &str = r#"#!/bin/sh
-key=""
-out=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --key) key="$2"; shift 2 ;;
-    --bucket|--if-none-match) shift 2 ;;
-    s3api|get-object) shift ;;
-    *) out="$1"; shift ;;
-  esac
-done
-if [ "$key" = "accepting.schema.json" ]; then
-  printf '%s' '{"type": "object"}' > "$out"
-else
-  printf '%s' '{"type": "object", "required": ["mock_remote"]}' > "$out"
-fi
-echo '{"ETag": "\"mock-s3-etag\""}'
-"#;
+/// The Moto server the S3 tests read from, which `make test` starts.
+fn moto_endpoint() -> String {
+    let endpoint = std::env::var("AWS_ENDPOINT_URL")
+        .expect("the S3 tests read from a Moto server: run them through `make test`");
+    assert!(
+        endpoint.starts_with("http://127.0.0.1:") || endpoint.starts_with("http://localhost:"),
+        "the S3 tests read only from a local Moto server, not {endpoint}"
+    );
+    endpoint
+}
+
+/// Creates `bucket` in the Moto server, holding each object of `objects`.
+fn seed_moto_bucket(bucket: &str, objects: &[(&str, &str)]) {
+    let endpoint = moto_endpoint();
+    ureq::put(&format!("{endpoint}/{bucket}"))
+        .send_empty()
+        .unwrap();
+    for (object_key, object_text) in objects {
+        ureq::put(&format!("{endpoint}/{bucket}/{object_key}"))
+            .send(*object_text)
+            .unwrap();
+    }
+}
 
 #[test]
 fn a_validation_fallback_reads_s3_and_http_remote_schemas_alike_in_the_list_order() {
     let server = MockSchemaServer::start(&[("rejecting.schema.json", REJECTING_REMOTE_SCHEMA)]);
+    seed_moto_bucket(
+        "mock-fallback-schemas",
+        &[("accepting.schema.json", r#"{"type": "object"}"#)],
+    );
     let workspace = MockWorkspace::new("validation-fallback-s3");
     let remote_urls = [
         server.url("rejecting.schema.json"),
-        "s3://mock-schemas/accepting.schema.json".to_owned(),
+        "s3://mock-fallback-schemas/accepting.schema.json?yaml_dsl_machine_credentials=true"
+            .to_owned(),
     ];
     stale_local_schema_workspace(&workspace, &remote_urls, true);
-    workspace.write("mock-bin/aws", AWS_ANSWERING);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            workspace.root.join("mock-bin/aws"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-    }
-    let path = format!(
-        "{}:{}",
-        workspace.root.join("mock-bin").display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let output = workspace.run_with(&["--no-color"], &[("PATH", &path)]);
+    let output = workspace.run(&["--no-color"]);
     assert!(
         output.status.success(),
         "{}",
