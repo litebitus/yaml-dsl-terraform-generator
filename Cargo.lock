@@ -3069,9 +3069,9 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "yaml-dsl-compiler"
-version = "0.3.1-snapshot.20261127025140"
+version = "0.3.1-snapshot.20261127035247"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98c2cdea069253122eee9a140c1ce86e425c9d87791e2a94920ca0a010c031b"
+checksum = "6811547849e0f26a4e7ff874331618fbe9bc7e669f5595759e4f574e6cb5a6ea"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
@@ -3082,9 +3082,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec"
-version = "0.4.2-snapshot.20261127024617"
+version = "0.4.2-snapshot.20261127034710"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b804588d34faea80f27eb5b8a66571983f0ba0fc6db85152b941ee3ab297161d"
+checksum = "0e85a2d7360687a72ca24ce5a3a75a5ca509305ae9639faf72ac86da3d601023"
 dependencies = [
  "fancy-regex 0.20.0",
  "jsonschema",
@@ -3097,9 +3097,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-diagnostic-renderer"
-version = "0.4.2-snapshot.20261127024617"
+version = "0.4.2-snapshot.20261127034710"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f6bb560d0fe5aaf93e0180d6e106540ce2ab83b0162d67bc9884340df2b5bf"
+checksum = "704432007339b0cb034b5d1882de90fb1a0577ffc3582cd82cdb59da842e67bc"
 dependencies = [
  "unicode-linebreak",
  "unicode-width",
@@ -3108,9 +3108,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-schema-reader-github"
-version = "0.4.2-snapshot.20261127024617"
+version = "0.4.2-snapshot.20261127034710"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "861f179a8dd3b3dd4f05792091382630b4e66e3767b967cafdf1158e4d7ec3e5"
+checksum = "dbd07be0662f492d8d0af9b24a48040be83453be240162b9b083e10465dc6e59"
 dependencies = [
  "serde_json",
  "yaml-dsl-spec",
@@ -3118,9 +3118,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-schema-reader-s3"
-version = "0.4.2-snapshot.20261127024617"
+version = "0.4.2-snapshot.20261127034710"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ad4770dd441a229ca794ce4081ef12dd190629ed45c9963dc058d9cd3456c76"
+checksum = "10a6cadc6881ce7f00d79a93431cd0ed69aea2663e98fe7dabeb90a720688fc7"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",

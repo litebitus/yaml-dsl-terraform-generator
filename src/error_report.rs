@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use yaml_dsl_spec::Diagnostic;
+use yaml_dsl_spec::{Diagnostic, Severity};
 use yaml_dsl_spec_diagnostic_renderer::{DiagnosticSource, RenderStyle, render_diagnostic};
 
 use crate::generated_files::FileChange;
@@ -50,6 +50,15 @@ pub fn changed_stacks(changed: usize, compared: usize) -> String {
 /// An error with no source to show.
 pub fn plain_error(style: RenderStyle, message: &str) -> String {
     render_diagnostic(&Diagnostic::unplaced(message), UNPLACED_SOURCE, style)
+}
+
+/// A warning with no source to show.
+pub fn plain_warning(style: RenderStyle, message: &str) -> String {
+    let warning = Diagnostic {
+        severity: Severity::Warning,
+        ..Diagnostic::unplaced(message)
+    };
+    render_diagnostic(&warning, UNPLACED_SOURCE, style)
 }
 
 /// The line closing a stack's errors.
@@ -179,6 +188,17 @@ mod tests {
         assert_eq!(
             stack_summary(PLAIN, "services/mock-api", 3),
             "error: services/mock-api generated no files: 3 errors"
+        );
+    }
+
+    #[test]
+    fn a_plain_warning_is_its_message_after_the_word_warning() {
+        assert_eq!(
+            plain_warning(
+                PLAIN,
+                "failed to save schema store entry `mock.json`: mock reason"
+            ),
+            "warning: failed to save schema store entry `mock.json`: mock reason"
         );
     }
 

@@ -267,6 +267,7 @@ The schema is found and read by the YAML DSL standard's schema resolution, the s
 - A URL is read without credentials first, and with the machine's only where it carries `yaml_dsl_machine_credentials=true`.
 - A warning, such as a credential refused before another is let in, is placed where the schema was named.
 - Copies of remote schemas, and what the compiler prepares from each schema, are kept in the schema cache, in the user's cache folder, `$XDG_CACHE_HOME/tfgen/schema-cache`, else `~/Library/Caches/tfgen/schema-cache` on macOS and `~/.cache/tfgen/schema-cache` elsewhere.
+- An entry the schema cache fails to save or drop is a warning on stderr, and the run goes on.
 - Stacks generated at once that read the same URL read it once: the first fetches it and keeps its copy, and the others wait for it and read that copy.
 
 A schema published with each release of the modules a stack pins takes two entries: the copy a stack's own `terraform init` keeps, and the release asset, for a stack not initialized yet:

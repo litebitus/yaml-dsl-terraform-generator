@@ -39,7 +39,9 @@ use crate::config_files::{
     DEFAULT_SCHEMA_CACHE_CAPACITY, DSL_CONFIG_FILE, LoadedConfig, LoadedConfigs,
 };
 use crate::disk_source::DiskSource;
-use crate::error_report::{SourceFiles, plain_error, report, stack_changes, stack_summary};
+use crate::error_report::{
+    SourceFiles, plain_error, plain_warning, report, stack_changes, stack_summary,
+};
 use crate::generated_files::{FileChange, write_stack_files};
 use crate::schema_lookup::schema_cache_directory;
 use crate::schema_overrides::{SCHEMA_VARIABLE, SchemaOverrides, schema_overrides, variable_pairs};
@@ -231,10 +233,12 @@ fn run(
         .map(LoadedConfig::schema_cache_capacity)
         .max()
         .unwrap_or(DEFAULT_SCHEMA_CACHE_CAPACITY);
+    let warning_style = styles.errors;
     let schema_store = SchemaFolderStore::new(
         schema_cache_directory(),
         NonZeroUsize::new(schema_cache_capacity)
             .expect("`schema_cache_capacity` is read as a whole number from 1"),
+        move |failure: &str| eprintln!("{}", plain_warning(warning_style, failure)),
     );
     let schema_cache = SchemaCache::default()
         .with_store(Arc::new(schema_store))
