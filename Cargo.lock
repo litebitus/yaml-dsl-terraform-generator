@@ -3069,9 +3069,9 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "yaml-dsl-compiler"
-version = "0.3.1-snapshot.20261127035247"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6811547849e0f26a4e7ff874331618fbe9bc7e669f5595759e4f574e6cb5a6ea"
+checksum = "2eef30d9225eec4121a87a4c583ee17f1ad55fe66dc2acc021e384c309ea6b35"
 dependencies = [
  "fancy-regex 0.20.0",
  "globset",
@@ -3082,9 +3082,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec"
-version = "0.4.2-snapshot.20261127034710"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e85a2d7360687a72ca24ce5a3a75a5ca509305ae9639faf72ac86da3d601023"
+checksum = "620c047f3b5beb60b7c44fe1605978c44aac0fc5adf35d5f97d9076f42d2528c"
 dependencies = [
  "fancy-regex 0.20.0",
  "jsonschema",
@@ -3097,9 +3097,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-diagnostic-renderer"
-version = "0.4.2-snapshot.20261127034710"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704432007339b0cb034b5d1882de90fb1a0577ffc3582cd82cdb59da842e67bc"
+checksum = "46f977349e4fd76e0e571926667635bc221a3e5aeb34a771e694db5fe8c6f255"
 dependencies = [
  "unicode-linebreak",
  "unicode-width",
@@ -3108,9 +3108,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-schema-reader-github"
-version = "0.4.2-snapshot.20261127034710"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbd07be0662f492d8d0af9b24a48040be83453be240162b9b083e10465dc6e59"
+checksum = "b399650592bffb48dec31e9174639521f1609945155be135423921045c970fca"
 dependencies = [
  "serde_json",
  "yaml-dsl-spec",
@@ -3118,9 +3118,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-dsl-spec-schema-reader-s3"
-version = "0.4.2-snapshot.20261127034710"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10a6cadc6881ce7f00d79a93431cd0ed69aea2663e98fe7dabeb90a720688fc7"
+checksum = "fbc59138d15a1725a1d5e8ff9d49fb2ca2306c35d138193a88b9f1f4cdc5b041"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
